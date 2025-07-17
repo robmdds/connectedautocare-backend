@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
 ConnectedAutoCare.com - Vercel Serverless Backend
-Enhanced CORS configuration for production deployment
+Fixed version that works with modular structure
 """
-# Import services and data
+
 from utils.response_helpers import success_response, error_response
 from data.vsc_rates_data import get_vsc_coverage_options
 from data.hero_products_data import get_hero_products
 from services.vin_decoder_service import VINDecoderService
 from services.vsc_rating_service import VSCRatingService
 from services.hero_rating_service import HeroRatingService
-
 import os
 import sys
 from datetime import datetime
@@ -22,47 +21,11 @@ api_dir = os.path.dirname(os.path.abspath(__file__))
 if api_dir not in sys.path:
     sys.path.insert(0, api_dir)
 
+# Import services and data
+
 # Initialize Flask app
 app = Flask(__name__)
-
-# Get CORS origins from environment variable
-
-
-def get_cors_origins():
-    """Get CORS origins from environment variable with fallback"""
-    cors_origins_env = os.environ.get('CORS_ORIGINS', '')
-
-    # Parse comma-separated origins from environment
-    env_origins = [origin.strip()
-                   for origin in cors_origins_env.split(',') if origin.strip()]
-
-    # Default origins for development
-    default_origins = [
-        "http://localhost:3000",  # Development frontend
-        "http://localhost:5173",  # Vite development server
-        "http://localhost:5000"   # Local development
-    ]
-
-    # Combine environment origins with defaults
-    all_origins = env_origins + default_origins
-
-    # Add wildcard support for Vercel preview deployments
-    all_origins.append("https://*.vercel.app")
-
-    print(f"CORS Origins configured: {all_origins}")
-    return all_origins
-
-
-# Simplified CORS configuration with explicit settings
-cors_origins = get_cors_origins()
-CORS(app,
-     origins=cors_origins,
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization",
-                    "Accept", "Origin", "X-Requested-With"],
-     supports_credentials=False,  # Changed to False to avoid wildcard issues
-     max_age=86400
-     )
+CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # App configuration
 app.config.update(
@@ -104,28 +67,6 @@ def api_health():
             "vin_decoder": "available"
         },
         "timestamp": datetime.utcnow().isoformat() + "Z"
-    })
-
-
-@app.route('/api/debug/cors')
-def debug_cors():
-    """Debug CORS configuration"""
-    origin = request.headers.get('Origin', 'No origin header')
-    user_agent = request.headers.get('User-Agent', 'No user agent')
-
-    cors_origins_env = os.environ.get('CORS_ORIGINS', 'Not set')
-    allowed_origins = get_cors_origins()
-
-    return jsonify({
-        "cors_debug": {
-            "request_origin": origin,
-            "user_agent": user_agent,
-            "cors_origins_env": cors_origins_env,
-            "allowed_origins": allowed_origins,
-            "origin_allowed": origin in allowed_origins or (origin and origin.endswith('.vercel.app')),
-            "request_headers": dict(request.headers),
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
     })
 
 # Hero Products API Endpoints
@@ -406,53 +347,24 @@ def handle_preflight():
     """Handle CORS preflight requests"""
     if request.method == "OPTIONS":
         response = make_response()
-        origin = request.headers.get('Origin')
-
-        # Always allow the specific origins from your environment variable
-        cors_origins_env = os.environ.get('CORS_ORIGINS', '')
-        env_origins = [origin.strip()
-                       for origin in cors_origins_env.split(',') if origin.strip()]
-
-        # Check if origin is allowed
-        if origin and (origin in env_origins or origin.endswith('.vercel.app') or 'localhost' in origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
-
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin, X-Requested-With'
-        response.headers['Access-Control-Max-Age'] = '86400'
-        response.status_code = 200
-
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "*")
+        response.headers.add('Access-Control-Allow-Methods', "*")
         return response
 
 
 @app.after_request
 def after_request(response):
     """Add CORS headers to all responses"""
-    origin = request.headers.get('Origin')
-
-    # Always allow the specific origins from your environment variable
-    cors_origins_env = os.environ.get('CORS_ORIGINS', '')
-    env_origins = [origin.strip()
-                   for origin in cors_origins_env.split(',') if origin.strip()]
-
-    # Check if origin is allowed
-    if origin and (origin in env_origins or origin.endswith('.vercel.app') or 'localhost' in origin):
-        response.headers['Access-Control-Allow-Origin'] = origin
-
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin, X-Requested-With'
-
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers',
+                         'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods',
+                         'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
 
-# For local development and Vercel deployment
+# For local development
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
-# For Vercel serverless deployment
-
-
-def handler(request):
-    """Vercel serverless function handler"""
-    return app(request.environ, lambda status, headers: None)
