@@ -54,7 +54,7 @@ app = Flask(__name__)
 
 # Configure CORS for Vercel deployment
 ALLOWED_ORIGINS = [
-    "https://www.connectedautocare.com/",
+    "https://www.connectedautocare.com",
     "https://connectedautocare.com",
     "https://api.connectedautocare.com",
 ]
