@@ -1,12 +1,6 @@
 {
   "version": 2,
   "name": "connectedautocare-backend",
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    }
-  ],
   "routes": [
     {
       "src": "/(.*)",
@@ -18,9 +12,9 @@
   },
   "functions": {
     "api/index.py": {
+      "runtime": "python3.9",
       "maxDuration": 30,
       "memory": 1024
     }
   }
 }
-
