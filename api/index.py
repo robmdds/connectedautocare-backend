@@ -1,30 +1,59 @@
 #!/usr/bin/env python3
 """
 ConnectedAutoCare.com - Vercel Serverless Backend
-Fixed version that works with modular structure
+Main entry point optimized for Vercel deployment
 """
 
-from utils.response_helpers import success_response, error_response
-from data.vsc_rates_data import get_vsc_coverage_options
-from data.hero_products_data import get_hero_products
-from services.vin_decoder_service import VINDecoderService
-from services.vsc_rating_service import VSCRatingService
-from services.hero_rating_service import HeroRatingService
 import os
 import sys
 from datetime import datetime
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 
-# Add the api directory to Python path for imports
-api_dir = os.path.dirname(os.path.abspath(__file__))
-if api_dir not in sys.path:
-    sys.path.insert(0, api_dir)
+# Add the current directory to Python path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
-# Import services and data
+# Import services with error handling
+try:
+    from services.hero_rating_service import HeroRatingService
+    from services.vsc_rating_service import VSCRatingService
+    from services.vin_decoder_service import VINDecoderService
+    from data.hero_products_data import get_hero_products
+    from data.vsc_rates_data import get_vsc_coverage_options
+    from utils.response_helpers import success_response, error_response
+except ImportError as e:
+    print(f"Import warning: {e}")
+    # Create fallback classes to prevent crashes
+
+    class HeroRatingService:
+        def generate_quote(self, *args, **kwargs):
+            return {"success": False, "error": "Service temporarily unavailable"}
+
+    class VSCRatingService:
+        def generate_quote(self, *args, **kwargs):
+            return {"success": False, "error": "Service temporarily unavailable"}
+
+    class VINDecoderService:
+        def decode_vin(self, *args, **kwargs):
+            return {"success": False, "error": "Service temporarily unavailable"}
+
+    def get_hero_products():
+        return {}
+
+    def get_vsc_coverage_options():
+        return {}
+
+    def success_response(data):
+        return {"success": True, "data": data}
+
+    def error_response(message, code=400):
+        return {"success": False, "error": message}, code
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Configure CORS for all origins (adjust for production)
 CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # App configuration
@@ -283,7 +312,7 @@ def decode_vin():
     except Exception as e:
         return jsonify(error_response(f"VIN decode error: {str(e)}")), 500
 
-# Payment and Contract Endpoints
+# Payment and Contract Endpoints (Placeholder for future implementation)
 
 
 @app.route('/api/payments/methods')
@@ -305,7 +334,7 @@ def get_payment_methods():
 
 @app.route('/api/contracts/generate', methods=['POST'])
 def generate_contract():
-    """Generate contract for purchased product"""
+    """Generate contract for purchased product (placeholder)"""
     try:
         data = request.get_json()
         if not data:
@@ -327,19 +356,19 @@ def generate_contract():
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
-    return jsonify(error_response("Endpoint not found")), 404
+    return jsonify(error_response("Endpoint not found", 404)), 404
 
 
 @app.errorhandler(405)
 def method_not_allowed(error):
     """Handle 405 errors"""
-    return jsonify(error_response("Method not allowed")), 405
+    return jsonify(error_response("Method not allowed", 405)), 405
 
 
 @app.errorhandler(500)
 def internal_error(error):
     """Handle 500 errors"""
-    return jsonify(error_response("Internal server error")), 500
+    return jsonify(error_response("Internal server error", 500)), 500
 
 
 @app.before_request
@@ -364,7 +393,9 @@ def after_request(response):
     return response
 
 
-# For local development
+app = app
+
+# For local development only
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
