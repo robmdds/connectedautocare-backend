@@ -6,8 +6,7 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": { 
-        "runtime": "python3.11",
-        "maxLambdaSize": "15mb"
+        "runtime": "python3.11"
       }
     }
   ],
@@ -18,35 +17,6 @@
     }
   ],
   "env": {
-    "PYTHONPATH": "api",
-    "FLASK_ENV": "production"
-  },
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Authorization, Accept, Origin, X-Requested-With"
-        },
-        {
-          "key": "Access-Control-Allow-Credentials",
-          "value": "true"
-        },
-        {
-          "key": "Access-Control-Max-Age",
-          "value": "86400"
-        }
-      ]
-    }
-  ],
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30
-    }
+    "PYTHONPATH": "api"
   }
 }
