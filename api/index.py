@@ -52,10 +52,26 @@ except ImportError as e:
 # Initialize Flask app
 app = Flask(__name__)
 
+# Configure CORS for Vercel deployment
+ALLOWED_ORIGINS = [
+    "https://connectedautocare-frontend-psi.vercel.app",
+    "https://connectedautocare.com",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5000",  # Add local backend for testing
+    "https://connectedautocare-backend-robs-projects-ec1694cd.vercel.app"
+]
+
+
+# Improved CORS implementation
 @app.after_request
 def after_request(response):
-    # More permissive CORS for development/testing
-    response.headers.add('Access-Control-Allow-Origin', '*')
+    origin = request.headers.get('Origin')
+    
+    # Allow requests from allowed origins or if no origin (same-origin)
+    if origin in ALLOWED_ORIGINS or origin is None:
+        response.headers.add('Access-Control-Allow-Origin', origin or '*')
+    
     response.headers.add('Access-Control-Allow-Headers',
                          'Content-Type,Authorization,X-Requested-With')
     response.headers.add('Access-Control-Allow-Methods',
@@ -70,13 +86,17 @@ def after_request(response):
 def handle_preflight():
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers',
-                             'Content-Type,Authorization,X-Requested-With')
-        response.headers.add('Access-Control-Allow-Methods',
-                             'GET,PUT,POST,DELETE,OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'false')
-        response.headers.add('Access-Control-Max-Age', '3600')
+        origin = request.headers.get('Origin')
+        
+        # Handle preflight for allowed origins
+        if origin in ALLOWED_ORIGINS or origin is None:
+            response.headers.add('Access-Control-Allow-Origin', origin or '*')
+            response.headers.add('Access-Control-Allow-Headers',
+                                 'Content-Type,Authorization,X-Requested-With')
+            response.headers.add('Access-Control-Allow-Methods',
+                                 'GET,PUT,POST,DELETE,OPTIONS')
+            response.headers.add('Access-Control-Allow-Credentials', 'false')
+            response.headers.add('Access-Control-Max-Age', '3600')
         
         return response
 
