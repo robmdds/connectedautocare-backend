@@ -4,7 +4,7 @@
   "builds": [
     {
       "src": "api/index.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python@3.11.0"
     }
   ],
   "routes": [
@@ -23,4 +23,3 @@
     }
   }
 }
-
