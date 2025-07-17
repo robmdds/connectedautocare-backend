@@ -54,12 +54,9 @@ app = Flask(__name__)
 
 # Configure CORS for Vercel deployment
 ALLOWED_ORIGINS = [
-    "https://connectedautocare-frontend-psi.vercel.app",
+    "https://www.connectedautocare.com/",
     "https://connectedautocare.com",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5000",  # Add local backend for testing
-    "https://connectedautocare-backend-robs-projects-ec1694cd.vercel.app"
+    "https://api.connectedautocare.com",
 ]
 
 
