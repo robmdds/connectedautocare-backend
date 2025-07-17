@@ -53,13 +53,23 @@ except ImportError as e:
 # Initialize Flask app
 app = Flask(__name__)
 
-# Configure CORS based on environment
+# Configure CORS - Allow your frontend domain
+FRONTEND_URL = "https://connectedautocare-frontend-psi.vercel.app"
+
 if os.environ.get('FLASK_ENV') == 'production':
-    allowed_origins = os.environ.get('CORS_ORIGINS', '').split(',')
-    CORS(app, origins=allowed_origins, methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    # Production CORS settings
+    CORS(app, 
+         origins=[FRONTEND_URL, "https://connectedautocare.com"],  # Add your custom domain if you have one
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         allow_headers=["Content-Type", "Authorization"],
+         supports_credentials=True)
 else:
-    # Allow all in development
-    CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    # Development CORS settings
+    CORS(app, 
+         origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         allow_headers=["Content-Type", "Authorization"],
+         supports_credentials=True)
 
 # App configuration
 app.config.update(

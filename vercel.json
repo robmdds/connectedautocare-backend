@@ -1,22 +1,37 @@
 {
   "version": 2,
-  "name": "connectedautocare-backend",
   "builds": [
     {
-      "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": { 
-        "runtime": "python3.11"
-      }
+      "src": "index.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "index.py"
     }
   ],
   "env": {
-    "PYTHONPATH": "api"
-  }
+    "FLASK_ENV": "production"
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://connectedautocare-frontend-psi.vercel.app"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization"
+        }
+      ]
+    }
+  ]
 }
