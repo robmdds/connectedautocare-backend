@@ -8,7 +8,6 @@ import os
 import sys
 from datetime import datetime
 from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -53,23 +52,46 @@ except ImportError as e:
 # Initialize Flask app
 app = Flask(__name__)
 
-# Configure CORS - Allow your frontend domain
-FRONTEND_URL = "https://connectedautocare-frontend-psi.vercel.app"
+# Configure CORS for Vercel deployment
+ALLOWED_ORIGINS = [
+    "https://connectedautocare-frontend-psi.vercel.app",
+    "https://connectedautocare.com",  # Add your custom domain if you have one
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
 
-if os.environ.get('FLASK_ENV') == 'production':
-    # Production CORS settings
-    CORS(app, 
-         origins=[FRONTEND_URL, "https://connectedautocare.com"],  # Add your custom domain if you have one
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         allow_headers=["Content-Type", "Authorization"],
-         supports_credentials=True)
-else:
-    # Development CORS settings
-    CORS(app, 
-         origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         allow_headers=["Content-Type", "Authorization"],
-         supports_credentials=True)
+# Manual CORS implementation that works well with Vercel
+
+
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    if origin in ALLOWED_ORIGINS:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+
+    response.headers.add('Access-Control-Allow-Headers',
+                         'Content-Type,Authorization,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods',
+                         'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'false')
+    response.headers.add('Access-Control-Max-Age', '3600')
+    return response
+
+
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = make_response()
+        origin = request.headers.get('Origin')
+        if origin in ALLOWED_ORIGINS:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Headers',
+                             'Content-Type,Authorization,X-Requested-With')
+        response.headers.add('Access-Control-Allow-Methods',
+                             'GET,PUT,POST,DELETE,OPTIONS')
+        response.headers.add('Access-Control-Max-Age', '3600')
+        return response
+
 
 # App configuration
 app.config.update(
