@@ -53,8 +53,13 @@ except ImportError as e:
 # Initialize Flask app
 app = Flask(__name__)
 
-# Configure CORS for all origins (adjust for production)
-CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+# Configure CORS based on environment
+if os.environ.get('FLASK_ENV') == 'production':
+    allowed_origins = os.environ.get('CORS_ORIGINS', '').split(',')
+    CORS(app, origins=allowed_origins, methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+else:
+    # Allow all in development
+    CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # App configuration
 app.config.update(
@@ -369,28 +374,6 @@ def method_not_allowed(error):
 def internal_error(error):
     """Handle 500 errors"""
     return jsonify(error_response("Internal server error", 500)), 500
-
-
-@app.before_request
-def handle_preflight():
-    """Handle CORS preflight requests"""
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add('Access-Control-Allow-Headers', "*")
-        response.headers.add('Access-Control-Allow-Methods', "*")
-        return response
-
-
-@app.after_request
-def after_request(response):
-    """Add CORS headers to all responses"""
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers',
-                         'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods',
-                         'GET,PUT,POST,DELETE,OPTIONS')
-    return response
 
 
 app = app

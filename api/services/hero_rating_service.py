@@ -32,14 +32,14 @@ class HeroRatingService:
         self.admin_fee = 25.00  # Administrative fee
         
     def generate_quote(self, product_type, term_years, coverage_limit=500, 
-                      customer_type='retail', state='FL', zip_code='33101', **kwargs):
+                  customer_type='retail', state='FL', zip_code='33101', **kwargs):
         """
         Generate a comprehensive quote for Hero products
         
         Args:
             product_type (str): Type of Hero product
-            term_years (int): Coverage term in years
-            coverage_limit (int): Coverage limit (500 or 1000)
+            term_years (int or str): Coverage term in years
+            coverage_limit (int or str): Coverage limit (500 or 1000)
             customer_type (str): 'retail' or 'wholesale'
             state (str): State code for tax calculation
             zip_code (str): ZIP code for regional pricing
@@ -48,6 +48,16 @@ class HeroRatingService:
             dict: Quote result with pricing breakdown
         """
         try:
+            # Convert string inputs to integers
+            try:
+                term_years = int(term_years)
+                coverage_limit = int(coverage_limit)
+            except (ValueError, TypeError) as e:
+                return {
+                    'success': False,
+                    'error': f'Invalid data types: term_years and coverage_limit must be numeric. Error: {str(e)}'
+                }
+            
             # Validate product type
             if product_type not in self.pricing_data:
                 return {
