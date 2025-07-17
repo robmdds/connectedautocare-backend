@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 ConnectedAutoCare.com - Vercel Serverless Backend
-Fixed version that works with modular structure
+Enhanced CORS configuration for production deployment
 """
+# Import services and data
+from utils.response_helpers import success_response, error_response
+from data.vsc_rates_data import get_vsc_coverage_options
+from data.hero_products_data import get_hero_products
+from services.vin_decoder_service import VINDecoderService
+from services.vsc_rating_service import VSCRatingService
+from services.hero_rating_service import HeroRatingService
 
 import os
 import sys
@@ -15,21 +22,52 @@ api_dir = os.path.dirname(os.path.abspath(__file__))
 if api_dir not in sys.path:
     sys.path.insert(0, api_dir)
 
-# Import services and data
-from services.hero_rating_service import HeroRatingService
-from services.vsc_rating_service import VSCRatingService
-from services.vin_decoder_service import VINDecoderService
-from data.hero_products_data import get_hero_products
-from data.vsc_rates_data import get_vsc_coverage_options
-from utils.response_helpers import success_response, error_response
-
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+
+# Get CORS origins from environment variable
+
+
+def get_cors_origins():
+    """Get CORS origins from environment variable with fallback"""
+    cors_origins_env = os.environ.get('CORS_ORIGINS', '')
+
+    # Parse comma-separated origins from environment
+    env_origins = [origin.strip()
+                   for origin in cors_origins_env.split(',') if origin.strip()]
+
+    # Default origins for development
+    default_origins = [
+        "http://localhost:3000",  # Development frontend
+        "http://localhost:5173",  # Vite development server
+        "http://localhost:5000"   # Local development
+    ]
+
+    # Combine environment origins with defaults
+    all_origins = env_origins + default_origins
+
+    # Add wildcard support for Vercel preview deployments
+    all_origins.append("https://*.vercel.app")
+
+    print(f"CORS Origins configured: {all_origins}")
+    return all_origins
+
+
+# Simplified CORS configuration with explicit settings
+cors_origins = get_cors_origins()
+CORS(app,
+     origins=cors_origins,
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization",
+                    "Accept", "Origin", "X-Requested-With"],
+     supports_credentials=False,  # Changed to False to avoid wildcard issues
+     max_age=86400
+     )
 
 # App configuration
 app.config.update(
-    SECRET_KEY=os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production'),
+    SECRET_KEY=os.environ.get(
+        'SECRET_KEY', 'dev-secret-key-change-in-production'),
     DEBUG=False,
     TESTING=False
 )
@@ -40,6 +78,8 @@ vsc_service = VSCRatingService()
 vin_service = VINDecoderService()
 
 # Health check endpoints
+
+
 @app.route('/')
 @app.route('/health')
 def health_check():
@@ -51,6 +91,7 @@ def health_check():
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "environment": "production"
     })
+
 
 @app.route('/api/health')
 def api_health():
@@ -65,7 +106,31 @@ def api_health():
         "timestamp": datetime.utcnow().isoformat() + "Z"
     })
 
+
+@app.route('/api/debug/cors')
+def debug_cors():
+    """Debug CORS configuration"""
+    origin = request.headers.get('Origin', 'No origin header')
+    user_agent = request.headers.get('User-Agent', 'No user agent')
+
+    cors_origins_env = os.environ.get('CORS_ORIGINS', 'Not set')
+    allowed_origins = get_cors_origins()
+
+    return jsonify({
+        "cors_debug": {
+            "request_origin": origin,
+            "user_agent": user_agent,
+            "cors_origins_env": cors_origins_env,
+            "allowed_origins": allowed_origins,
+            "origin_allowed": origin in allowed_origins or (origin and origin.endswith('.vercel.app')),
+            "request_headers": dict(request.headers),
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+    })
+
 # Hero Products API Endpoints
+
+
 @app.route('/api/hero/health')
 def hero_health():
     """Hero products service health check"""
@@ -81,6 +146,7 @@ def hero_health():
     except Exception as e:
         return jsonify(error_response(f"Hero service error: {str(e)}")), 500
 
+
 @app.route('/api/hero/products')
 def get_all_hero_products():
     """Get all Hero products with pricing information"""
@@ -90,6 +156,7 @@ def get_all_hero_products():
     except Exception as e:
         return jsonify(error_response(f"Failed to retrieve products: {str(e)}")), 500
 
+
 @app.route('/api/hero/products/<category>')
 def get_hero_products_by_category(category):
     """Get Hero products by category"""
@@ -97,13 +164,14 @@ def get_hero_products_by_category(category):
         all_products = get_hero_products()
         if category not in all_products:
             return jsonify(error_response(f"Category '{category}' not found")), 404
-        
+
         return jsonify(success_response({
             "category": category,
             "products": all_products[category]
         }))
     except Exception as e:
         return jsonify(error_response(f"Failed to retrieve category: {str(e)}")), 500
+
 
 @app.route('/api/hero/quote', methods=['POST'])
 def generate_hero_quote():
@@ -112,13 +180,14 @@ def generate_hero_quote():
         data = request.get_json()
         if not data:
             return jsonify(error_response("Request body is required")), 400
-        
+
         # Validate required fields
         required_fields = ['product_type', 'term_years']
-        missing_fields = [field for field in required_fields if field not in data]
+        missing_fields = [
+            field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify(error_response(f"Missing required fields: {', '.join(missing_fields)}")), 400
-        
+
         # Generate quote
         quote_result = hero_service.generate_quote(
             product_type=data['product_type'],
@@ -128,16 +197,18 @@ def generate_hero_quote():
             state=data.get('state', 'FL'),
             zip_code=data.get('zip_code', '33101')
         )
-        
+
         if quote_result.get('success'):
             return jsonify(success_response(quote_result))
         else:
             return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
-            
+
     except Exception as e:
         return jsonify(error_response(f"Quote generation error: {str(e)}")), 500
 
 # VSC Rating API Endpoints
+
+
 @app.route('/api/vsc/health')
 def vsc_health():
     """VSC rating service health check"""
@@ -152,6 +223,7 @@ def vsc_health():
     except Exception as e:
         return jsonify(error_response(f"VSC service error: {str(e)}")), 500
 
+
 @app.route('/api/vsc/coverage-options')
 def get_vsc_coverage():
     """Get available VSC coverage options"""
@@ -161,6 +233,7 @@ def get_vsc_coverage():
     except Exception as e:
         return jsonify(error_response(f"Failed to retrieve coverage options: {str(e)}")), 500
 
+
 @app.route('/api/vsc/quote', methods=['POST'])
 def generate_vsc_quote():
     """Generate VSC quote based on vehicle information"""
@@ -168,13 +241,14 @@ def generate_vsc_quote():
         data = request.get_json()
         if not data:
             return jsonify(error_response("Request body is required")), 400
-        
+
         # Validate required fields
         required_fields = ['make', 'year', 'mileage']
-        missing_fields = [field for field in required_fields if field not in data]
+        missing_fields = [
+            field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify(error_response(f"Missing required fields: {', '.join(missing_fields)}")), 400
-        
+
         # Generate quote
         quote_result = vsc_service.generate_quote(
             make=data['make'],
@@ -186,18 +260,20 @@ def generate_vsc_quote():
             deductible=data.get('deductible', 100),
             customer_type=data.get('customer_type', 'retail')
         )
-        
+
         if quote_result.get('success'):
             return jsonify(success_response(quote_result))
         else:
             return jsonify(error_response(quote_result.get('error', 'VSC quote generation failed'))), 400
-            
+
     except ValueError as e:
         return jsonify(error_response(f"Invalid input data: {str(e)}")), 400
     except Exception as e:
         return jsonify(error_response(f"VSC quote error: {str(e)}")), 500
 
 # VIN Decoder API Endpoints
+
+
 @app.route('/api/vin/health')
 def vin_health():
     """VIN decoder service health check"""
@@ -208,6 +284,7 @@ def vin_health():
         "timestamp": datetime.utcnow().isoformat() + "Z"
     })
 
+
 @app.route('/api/vin/validate', methods=['POST'])
 def validate_vin():
     """Validate VIN format"""
@@ -215,29 +292,30 @@ def validate_vin():
         data = request.get_json()
         if not data or 'vin' not in data:
             return jsonify(error_response("VIN is required")), 400
-        
+
         vin = data['vin'].strip().upper()
-        
+
         # Basic VIN validation
         if len(vin) != 17:
             return jsonify(error_response("VIN must be exactly 17 characters")), 400
-        
+
         if not vin.isalnum():
             return jsonify(error_response("VIN must contain only letters and numbers")), 400
-        
+
         # Check for invalid characters (I, O, Q not allowed in VIN)
         invalid_chars = set('IOQ') & set(vin)
         if invalid_chars:
             return jsonify(error_response(f"VIN contains invalid characters: {', '.join(invalid_chars)}")), 400
-        
+
         return jsonify(success_response({
             "vin": vin,
             "valid": True,
             "format": "valid"
         }))
-        
+
     except Exception as e:
         return jsonify(error_response(f"VIN validation error: {str(e)}")), 500
+
 
 @app.route('/api/vin/decode', methods=['POST'])
 def decode_vin():
@@ -246,25 +324,27 @@ def decode_vin():
         data = request.get_json()
         if not data or 'vin' not in data:
             return jsonify(error_response("VIN is required")), 400
-        
+
         vin = data['vin'].strip().upper()
-        
+
         # Validate VIN first
         if len(vin) != 17:
             return jsonify(error_response("Invalid VIN length")), 400
-        
+
         # Decode VIN
         decode_result = vin_service.decode_vin(vin)
-        
+
         if decode_result.get('success'):
             return jsonify(success_response(decode_result['vehicle_info']))
         else:
             return jsonify(error_response(decode_result.get('error', 'VIN decode failed'))), 400
-            
+
     except Exception as e:
         return jsonify(error_response(f"VIN decode error: {str(e)}")), 500
 
 # Payment and Contract Endpoints
+
+
 @app.route('/api/payments/methods')
 def get_payment_methods():
     """Get available payment methods"""
@@ -281,6 +361,7 @@ def get_payment_methods():
         }
     }))
 
+
 @app.route('/api/contracts/generate', methods=['POST'])
 def generate_contract():
     """Generate contract for purchased product"""
@@ -288,53 +369,90 @@ def generate_contract():
         data = request.get_json()
         if not data:
             return jsonify(error_response("Contract data is required")), 400
-        
+
         # Placeholder response
         return jsonify(success_response({
             "contract_id": f"CAC-{datetime.utcnow().strftime('%Y%m%d')}-001",
             "status": "generated",
             "message": "Contract generation feature coming soon"
         }))
-        
+
     except Exception as e:
         return jsonify(error_response(f"Contract generation error: {str(e)}")), 500
 
 # Error handlers
+
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
     return jsonify(error_response("Endpoint not found")), 404
+
 
 @app.errorhandler(405)
 def method_not_allowed(error):
     """Handle 405 errors"""
     return jsonify(error_response("Method not allowed")), 405
 
+
 @app.errorhandler(500)
 def internal_error(error):
     """Handle 500 errors"""
     return jsonify(error_response("Internal server error")), 500
+
 
 @app.before_request
 def handle_preflight():
     """Handle CORS preflight requests"""
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add('Access-Control-Allow-Headers', "*")
-        response.headers.add('Access-Control-Allow-Methods', "*")
+        origin = request.headers.get('Origin')
+
+        # Always allow the specific origins from your environment variable
+        cors_origins_env = os.environ.get('CORS_ORIGINS', '')
+        env_origins = [origin.strip()
+                       for origin in cors_origins_env.split(',') if origin.strip()]
+
+        # Check if origin is allowed
+        if origin and (origin in env_origins or origin.endswith('.vercel.app') or 'localhost' in origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin, X-Requested-With'
+        response.headers['Access-Control-Max-Age'] = '86400'
+        response.status_code = 200
+
         return response
+
 
 @app.after_request
 def after_request(response):
     """Add CORS headers to all responses"""
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    origin = request.headers.get('Origin')
+
+    # Always allow the specific origins from your environment variable
+    cors_origins_env = os.environ.get('CORS_ORIGINS', '')
+    env_origins = [origin.strip()
+                   for origin in cors_origins_env.split(',') if origin.strip()]
+
+    # Check if origin is allowed
+    if origin and (origin in env_origins or origin.endswith('.vercel.app') or 'localhost' in origin):
+        response.headers['Access-Control-Allow-Origin'] = origin
+
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin, X-Requested-With'
+
     return response
 
-# For local development
+
+# For local development and Vercel deployment
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-    
+
+# For Vercel serverless deployment
+
+
+def handler(request):
+    """Vercel serverless function handler"""
+    return app(request.environ, lambda status, headers: None)
