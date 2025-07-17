@@ -4,7 +4,11 @@
   "builds": [
     {
       "src": "api/index.py",
-      "use": "@vercel/python@3.11.0"
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.11"
+      }
     }
   ],
   "routes": [
@@ -15,11 +19,5 @@
   ],
   "env": {
     "PYTHONPATH": "api"
-  },
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30,
-      "memory": 1024
-    }
   }
 }
