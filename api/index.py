@@ -63,21 +63,22 @@ ALLOWED_ORIGINS = [
 ]
 
 
-# Improved CORS implementation
+# FIXED CORS implementation
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin')
     
-    # Allow requests from allowed origins or if no origin (same-origin)
-    if origin in ALLOWED_ORIGINS or origin is None:
-        response.headers.add('Access-Control-Allow-Origin', origin or '*')
+    # Set CORS headers for allowed origins
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    elif origin is None:
+        # For same-origin requests or requests without origin header
+        response.headers['Access-Control-Allow-Origin'] = '*'
     
-    response.headers.add('Access-Control-Allow-Headers',
-                         'Content-Type,Authorization,X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods',
-                         'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'false')
-    response.headers.add('Access-Control-Max-Age', '3600')
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+    response.headers['Access-Control-Allow-Credentials'] = 'false'
+    response.headers['Access-Control-Max-Age'] = '3600'
     
     return response
 
@@ -89,14 +90,15 @@ def handle_preflight():
         origin = request.headers.get('Origin')
         
         # Handle preflight for allowed origins
-        if origin in ALLOWED_ORIGINS or origin is None:
-            response.headers.add('Access-Control-Allow-Origin', origin or '*')
-            response.headers.add('Access-Control-Allow-Headers',
-                                 'Content-Type,Authorization,X-Requested-With')
-            response.headers.add('Access-Control-Allow-Methods',
-                                 'GET,PUT,POST,DELETE,OPTIONS')
-            response.headers.add('Access-Control-Allow-Credentials', 'false')
-            response.headers.add('Access-Control-Max-Age', '3600')
+        if origin in ALLOWED_ORIGINS:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'false'
+        response.headers['Access-Control-Max-Age'] = '3600'
         
         return response
 
@@ -422,3 +424,4 @@ app = app
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+    
