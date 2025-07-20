@@ -33,7 +33,6 @@ try:
     from utils.response_helpers import success_response, error_response
     customer_services_available = True
 except ImportError as e:
-    print(f"Customer services import warning: {e}")
     customer_services_available = False
     # Create fallback classes to prevent crashes
 
@@ -68,7 +67,6 @@ try:
     from admin.contract_management import contract_bp
     from auth.admin_auth import auth_bp
     admin_modules_available = True
-    print("Admin modules imported successfully")
 except ImportError as e:
     print(f"Admin modules import error: {e}")
     admin_modules_available = False
