@@ -1152,20 +1152,8 @@ def create_app():
     return app
 
 
-# Create the application instance
-app = create_app()
-
-# For Vercel deployment
-
-
-def handler(request):
-    """Vercel serverless function handler"""
-    return app(request.environ, lambda status, headers: None)
-
-
 # For local development only
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-else:
-    application = app  # For WSGI servers like Gunicorn or uWSGI
+
