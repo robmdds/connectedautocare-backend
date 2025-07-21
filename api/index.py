@@ -195,7 +195,9 @@ ALLOWED_ORIGINS = [
     "https://connectedautocare.com",
     "https://api.connectedautocare.com",
     "https://admin.connectedautocare.com",
-    "https://portal.connectedautocare.com"
+    "https://portal.connectedautocare.com",
+    "http://localhost:5173",  # Local development
+    "http://127.0.0.1:5173",  # Local development
 ]
 
 # Configure CORS
@@ -941,6 +943,7 @@ def get_profile():
             if customer:
                 additional_data['customer_profile'] = customer
 
+        print(f"User profile accessed: {user_id} ({role})")
         return jsonify({
             'user': {
                 'id': user_id,
@@ -1053,6 +1056,32 @@ def get_dashboard():
 
     except Exception as e:
         return jsonify({'error': f'Failed to generate dashboard: {str(e)}'}), 500
+
+
+@app.route('/api/analytics/customer-dashboard', methods=['GET'])
+@token_required
+@role_required('customer')  # Allows customers and above
+def get_customer_dashboard():
+    """Customer-specific dashboard with limited data"""
+    try:
+        customer_user_id = request.current_user.get('user_id')
+        
+        # Filter data to only show customer's own information
+        customer_transactions = [t for t in transactions_db.values() 
+                               if t.get('customer_id') == customer_user_id]
+        customer_policies = [p for p in policies_db.values() 
+                           if p.get('customer_id') == customer_user_id]
+        
+        # Return limited dashboard data
+        return jsonify({
+            'customer_metrics': {
+                'total_policies': len(customer_policies),
+                'active_policies': len([p for p in customer_policies if p.get('status') == 'active']),
+                'total_spent': sum(t.get('amount', 0) for t in customer_transactions if t.get('status') == 'completed')
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate customer dashboard: {str(e)}'}), 500
 
 
 @app.route('/api/analytics/reports/<report_type>', methods=['GET'])
