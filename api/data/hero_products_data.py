@@ -1,306 +1,345 @@
 #!/usr/bin/env python3
 """
-Hero Products Data
-Complete product catalog and pricing information for Hero protection products
+Hero Products Data - July 2025 with Database Integration
+Smart fallback from database to hardcoded pricing
 """
 
-# Hero Products Pricing Configuration
+import os
+
+# Updated Hero Products Pricing Configuration (July 2025) - FALLBACK DATA
 HERO_PRODUCTS_PRICING = {
     'home_protection': {
         'base_price': 199,
         'multipliers': {
             1: 1.0,    # 1 year: $199
-            2: 1.8,    # 2 years: $358
-            3: 2.5,    # 3 years: $498
-            4: 3.2,    # 4 years: $637
-            5: 3.8     # 5 years: $756
+            2: 1.51,   # 2 years: $300
+            3: 2.01,   # 3 years: $400
+            4: 2.51,   # 4 years: $500
+            5: 3.01    # 5 years: $599
         }
     },
-    'auto_protection': {
-        'base_price': 299,
+    'comprehensive_auto_protection': {
+        'base_price': 339,
         'multipliers': {
-            1: 1.0,    # 1 year: $299
-            2: 1.9,    # 2 years: $568
-            3: 2.7,    # 3 years: $807
-            4: 3.4,    # 4 years: $1,017
-            5: 4.0     # 5 years: $1,196
+            1: 1.0,    # 1 year: $339
+            2: 1.77,   # 2 years: $600
+            3: 2.36,   # 3 years: $800
+            4: 2.95,   # 4 years: $1000
+            5: 3.24    # 5 years: $1099
         }
     },
-    'deductible_reimbursement': {
+    'home_deductible_reimbursement': {
+        'base_price': 160,
+        'multipliers': {
+            1: 1.0,    # 1 year: $160
+            2: 1.34,   # 2 years: $215
+            3: 1.59    # 3 years: $255
+        }
+    },
+    'multi_vehicle_deductible_reimbursement': {
         'base_price': 150,
         'multipliers': {
             1: 1.0,    # 1 year: $150
-            2: 1.7,    # 2 years: $255
-            3: 2.3     # 3 years: $345
+            2: 1.50,   # 2 years: $225
+            3: 1.83    # 3 years: $275
+        }
+    },
+    'auto_advantage_deductible_reimbursement': {
+        'base_price': 120,
+        'multipliers': {
+            1: 1.0,    # 1 year: $120
+            2: 1.50,   # 2 years: $180
+            3: 1.88    # 3 years: $225
+        }
+    },
+    'all_vehicle_deductible_reimbursement': {
+        'base_price': 150,
+        'multipliers': {
+            1: 1.0,    # 1 year: $150
+            2: 1.50,   # 2 years: $225
+            3: 1.83    # 3 years: $275
+        }
+    },
+    'auto_rv_deductible_reimbursement': {
+        'base_price': 175,
+        'multipliers': {
+            1: 1.0,    # 1 year: $175
+            2: 1.43,   # 2 years: $250
+            3: 1.60    # 3 years: $280
+        }
+    },
+    'hero_level_protection_home': {
+        'base_price': 789,
+        'multipliers': {
+            1: 1.0,    # 1 year: $789
+            2: 1.39,   # 2 years: $1100
+            3: 1.64    # 3 years: $1295
         }
     }
 }
 
-# Complete Hero Products Catalog
-HERO_PRODUCTS_CATALOG = {
-    "home_protection": {
-        "category_name": "Home Protection Plans",
-        "category_description": "Comprehensive home protection with deductible reimbursement and emergency services",
-        "products": [
-            {
-                "product_code": "HOME_PROTECTION_PLAN",
-                "product_name": "Home Protection Plan",
-                "short_description": "Complete home protection coverage",
-                "detailed_description": "Comprehensive home protection plan including deductible reimbursement for covered claims, glass repair coverage, lockout assistance, and emergency services. Provides peace of mind for homeowners with 24/7 support and nationwide coverage.",
-                "features": [
-                    "Deductible reimbursement up to policy limits",
-                    "Glass repair and replacement coverage",
-                    "24/7 lockout assistance",
-                    "Emergency plumbing and electrical services",
-                    "HVAC emergency coverage",
-                    "Identity theft restoration services",
-                    "Warranty vault document storage"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3, 4, 5],
-                "base_price": 199,
-                "price_range": {
-                    "min_price": 199,
-                    "max_price": 756
-                }
-            },
-            {
-                "product_code": "HOME_DEDUCTIBLE_REIMBURSEMENT",
-                "product_name": "Home Deductible Reimbursement",
-                "short_description": "Home insurance deductible coverage",
-                "detailed_description": "Specialized coverage for home insurance deductibles with additional identity theft restoration and warranty vault services. Perfect for homeowners looking to reduce out-of-pocket expenses when filing insurance claims.",
-                "features": [
-                    "Home insurance deductible reimbursement",
-                    "Identity theft restoration services",
-                    "Warranty vault document storage",
-                    "24/7 customer support",
-                    "Fast claim processing",
-                    "No waiting periods"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3],
-                "base_price": 160,
-                "price_range": {
-                    "min_price": 160,
-                    "max_price": 368
-                }
-            },
-            {
-                "product_code": "HERO_LEVEL_HOME_PROTECTION",
-                "product_name": "Hero-Level Protection for Your Home",
-                "short_description": "Premium home protection package",
-                "detailed_description": "Our most comprehensive home protection plan offering maximum coverage limits, premium services, and enhanced benefits. Designed for homeowners who want the ultimate protection and peace of mind.",
-                "features": [
-                    "Maximum deductible reimbursement coverage",
-                    "Premium glass repair and replacement",
-                    "Priority 24/7 emergency services",
-                    "Enhanced HVAC and appliance coverage",
-                    "Premium identity theft restoration",
-                    "Concierge-level customer service",
-                    "Extended warranty vault services",
-                    "Home security system monitoring discounts"
-                ],
-                "coverage_limits": [1000, 2000],
-                "terms_available": [1, 2, 3],
-                "base_price": 789,
-                "price_range": {
-                    "min_price": 789,
-                    "max_price": 1814
-                }
-            }
-        ]
-    },
-    "auto_protection": {
-        "category_name": "Auto Protection Plans",
-        "category_description": "Complete automotive protection including deductible reimbursement and emergency services",
-        "products": [
-            {
-                "product_code": "COMPREHENSIVE_AUTO_PROTECTION",
-                "product_name": "Comprehensive Auto Protection",
-                "short_description": "Complete automotive protection package",
-                "detailed_description": "All-inclusive automotive protection plan covering deductible reimbursement, dent repair, emergency roadside assistance, and more. Designed to keep you protected and on the road with minimal out-of-pocket expenses.",
-                "features": [
-                    "Auto insurance deductible reimbursement",
-                    "Paintless dent repair coverage",
-                    "24/7 emergency roadside assistance",
-                    "Towing and labor coverage",
-                    "Rental car assistance",
-                    "Key replacement services",
-                    "Battery jump-start service",
-                    "Flat tire assistance",
-                    "Emergency fuel delivery"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3, 4, 5],
-                "base_price": 299,
-                "price_range": {
-                    "min_price": 299,
-                    "max_price": 1196
-                }
-            }
-        ]
-    },
-    "deductible_reimbursement": {
-        "category_name": "Deductible Reimbursement Plans",
-        "category_description": "Specialized deductible reimbursement coverage for various vehicle types",
-        "products": [
-            {
-                "product_code": "AUTO_ADVANTAGE_DEDUCTIBLE_REIMBURSEMENT",
-                "product_name": "Auto Advantage Deductible Reimbursement",
-                "short_description": "Single vehicle deductible coverage",
-                "detailed_description": "Targeted deductible reimbursement for a single vehicle with additional identity restoration and warranty vault services. Perfect for individual vehicle owners looking to minimize insurance claim costs.",
-                "features": [
-                    "Single VIN auto deductible reimbursement",
-                    "Identity theft restoration services",
-                    "Warranty vault document storage",
-                    "Fast claim processing",
-                    "24/7 customer support",
-                    "No mileage restrictions"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3],
-                "base_price": 120,
-                "price_range": {
-                    "min_price": 120,
-                    "max_price": 276
-                }
-            },
-            {
-                "product_code": "ALL_VEHICLE_DEDUCTIBLE_REIMBURSEMENT",
-                "product_name": "All Vehicle Deductible Reimbursement",
-                "short_description": "Multi-vehicle protection coverage",
-                "detailed_description": "Comprehensive deductible reimbursement covering cars, motorcycles, ATVs, boats, and RVs. Ideal for families or individuals with multiple recreational vehicles who want complete protection.",
-                "features": [
-                    "Multi-vehicle coverage (cars, motorcycles, ATVs, boats, RVs)",
-                    "Unlimited vehicle additions during term",
-                    "Identity theft restoration services",
-                    "Warranty vault document storage",
-                    "Priority claim processing",
-                    "24/7 customer support",
-                    "Recreational vehicle specialist support"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3],
-                "base_price": 150,
-                "price_range": {
-                    "min_price": 150,
-                    "max_price": 345
-                }
-            },
-            {
-                "product_code": "AUTO_RV_DEDUCTIBLE_REIMBURSEMENT",
-                "product_name": "Auto & RV Deductible Reimbursement",
-                "short_description": "Auto and RV specialized coverage",
-                "detailed_description": "Specialized deductible reimbursement for both automobiles and recreational vehicles with enhanced benefits for RV owners including roadside assistance and emergency services.",
-                "features": [
-                    "Auto and RV deductible coverage",
-                    "Enhanced RV emergency services",
-                    "Specialized RV roadside assistance",
-                    "Identity theft restoration services",
-                    "Warranty vault document storage",
-                    "RV-specific customer support",
-                    "Campground directory access"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3],
-                "base_price": 175,
-                "price_range": {
-                    "min_price": 175,
-                    "max_price": 403
-                }
-            },
-            {
-                "product_code": "MULTI_VEHICLE_DEDUCTIBLE_REIMBURSEMENT",
-                "product_name": "Multi Vehicle Deductible Reimbursement",
-                "short_description": "Multiple vehicle protection plan",
-                "detailed_description": "Flexible deductible reimbursement plan covering multiple vehicles with the ability to add or remove vehicles during the coverage term. Perfect for growing families or changing vehicle needs.",
-                "features": [
-                    "Multiple vehicle protection",
-                    "Flexible vehicle additions/removals",
-                    "Comprehensive deductible reimbursement",
-                    "Identity theft restoration services",
-                    "Warranty vault document storage",
-                    "Family-friendly customer support",
-                    "Online account management"
-                ],
-                "coverage_limits": [500, 1000],
-                "terms_available": [1, 2, 3],
-                "base_price": 150,
-                "price_range": {
-                    "min_price": 150,
-                    "max_price": 345
-                }
-            }
-        ]
-    }
+# Contact information updated per requirements
+CONTACT_INFO = {
+    'phone': '1-(866) 660-7003',  # Updated from 1-800-AUTOCARE
+    'email': 'support@connectedautocare.com',
+    'support_hours': '24/7',
+    'updated': 'July 2025'
 }
 
-def get_hero_products():
-    """Get the complete Hero products catalog"""
-    return HERO_PRODUCTS_CATALOG
 
-def get_hero_product_by_code(product_code):
-    """Get a specific Hero product by its product code"""
-    for category in HERO_PRODUCTS_CATALOG.values():
-        for product in category['products']:
-            if product['product_code'] == product_code:
-                return product
-    return None
+def get_price_from_db_or_fallback(product_code, term_years, customer_type='retail'):
+    """
+    Smart pricing: Try database first, fallback to hardcoded pricing
+    This is the main function to use for all pricing calculations
+    """
+    try:
+        # Try database first
+        database_url = os.environ.get('POSTGRES_URL')
+        if database_url:
+            import psycopg2
 
-def get_hero_products_by_category(category):
-    """Get Hero products for a specific category"""
-    return HERO_PRODUCTS_CATALOG.get(category, {})
+            conn = psycopg2.connect(database_url)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT p.base_price, pr.multiplier 
+                FROM products p 
+                JOIN pricing pr ON p.product_code = pr.product_code 
+                WHERE p.product_code = %s AND pr.term_years = %s AND pr.customer_type = %s
+            ''', (product_code, term_years, customer_type))
+
+            result = cursor.fetchone()
+            cursor.close()
+            conn.close()
+
+            if result:
+                base_price, multiplier = result
+                final_price = float(base_price) * float(multiplier)
+                return {
+                    'success': True,
+                    'base_price': float(base_price),
+                    'multiplier': float(multiplier),
+                    'final_price': round(final_price, 2),
+                    'data_source': 'database',
+                    'customer_type': customer_type,
+                    'term_years': term_years
+                }
+    except Exception as e:
+        print(f"Database error (falling back to hardcoded): {e}")
+
+    # Fallback to hardcoded pricing
+    return get_hardcoded_price(product_code, term_years, customer_type)
+
+
+def get_hardcoded_price(product_code, term_years, customer_type='retail'):
+    """Get pricing from hardcoded data (fallback)"""
+    # Map product codes to pricing keys
+    code_mapping = {
+        'HOME_PROTECTION_PLAN': 'home_protection',
+        'COMPREHENSIVE_AUTO_PROTECTION': 'comprehensive_auto_protection',
+        'HOME_DEDUCTIBLE_REIMBURSEMENT': 'home_deductible_reimbursement',
+        'AUTO_ADVANTAGE_DEDUCTIBLE_REIMBURSEMENT': 'auto_advantage_deductible_reimbursement',
+        'MULTI_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'multi_vehicle_deductible_reimbursement',
+        'ALL_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'all_vehicle_deductible_reimbursement',
+        'AUTO_RV_DEDUCTIBLE_REIMBURSEMENT': 'auto_rv_deductible_reimbursement',
+        'HERO_LEVEL_HOME_PROTECTION': 'hero_level_protection_home'
+    }
+
+    pricing_key = code_mapping.get(product_code)
+    if not pricing_key or pricing_key not in HERO_PRODUCTS_PRICING:
+        return {'success': False, 'error': 'Product not found'}
+
+    config = HERO_PRODUCTS_PRICING[pricing_key]
+    if term_years not in config['multipliers']:
+        return {'success': False, 'error': 'Invalid term'}
+
+    base_price = config['base_price']
+    multiplier = config['multipliers'][term_years]
+
+    if customer_type == 'wholesale':
+        multiplier *= 0.85  # 15% wholesale discount
+
+    final_price = base_price * multiplier
+
+    return {
+        'success': True,
+        'base_price': base_price,
+        'multiplier': multiplier,
+        'final_price': round(final_price, 2),
+        'data_source': 'hardcoded',
+        'customer_type': customer_type,
+        'term_years': term_years
+    }
+
+
+def calculate_hero_price(product_type, term_years, coverage_limit=500, customer_type='retail'):
+    """
+    Updated main pricing function - uses database-first approach
+    This maintains backward compatibility with existing API calls
+    """
+    try:
+        # Convert product_type to product_code format
+        type_to_code_mapping = {
+            'home_protection': 'HOME_PROTECTION_PLAN',
+            'comprehensive_auto_protection': 'COMPREHENSIVE_AUTO_PROTECTION',
+            'home_deductible_reimbursement': 'HOME_DEDUCTIBLE_REIMBURSEMENT',
+            'auto_advantage_deductible_reimbursement': 'AUTO_ADVANTAGE_DEDUCTIBLE_REIMBURSEMENT',
+            'multi_vehicle_deductible_reimbursement': 'MULTI_VEHICLE_DEDUCTIBLE_REIMBURSEMENT',
+            'all_vehicle_deductible_reimbursement': 'ALL_VEHICLE_DEDUCTIBLE_REIMBURSEMENT',
+            'auto_rv_deductible_reimbursement': 'AUTO_RV_DEDUCTIBLE_REIMBURSEMENT',
+            'hero_level_protection_home': 'HERO_LEVEL_HOME_PROTECTION'
+        }
+
+        product_code = type_to_code_mapping.get(product_type)
+        if not product_code:
+            return {'success': False, 'error': f'Unknown product type: {product_type}'}
+
+        # Get base pricing
+        pricing_result = get_price_from_db_or_fallback(
+            product_code, term_years, customer_type)
+
+        if not pricing_result['success']:
+            return pricing_result
+
+        # Apply coverage limit multiplier
+        coverage_multiplier = 1.2 if coverage_limit == 1000 else 1.0
+        final_price = pricing_result['final_price'] * coverage_multiplier
+
+        return {
+            'success': True,
+            'base_price': pricing_result['base_price'],
+            'term_multiplier': pricing_result['multiplier'],
+            'coverage_multiplier': coverage_multiplier,
+            'subtotal': round(final_price, 2),
+            'customer_type': customer_type,
+            'data_source': pricing_result['data_source'],
+            'pricing_updated': 'July 2025'
+        }
+
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def get_all_products_pricing():
+    """Get pricing for all products - tries database first"""
+    try:
+        database_url = os.environ.get('POSTGRES_URL')
+        if database_url:
+            import psycopg2
+
+            conn = psycopg2.connect(database_url)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT p.product_code, p.product_name, p.base_price, 
+                       pr.term_years, pr.multiplier, pr.customer_type,
+                       ROUND(p.base_price * pr.multiplier, 2) as final_price
+                FROM products p 
+                JOIN pricing pr ON p.product_code = pr.product_code 
+                WHERE pr.customer_type = 'retail'
+                ORDER BY p.product_code, pr.term_years;
+            ''')
+
+            results = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            # Group results by product
+            products = {}
+            for row in results:
+                code, name, base_price, term, multiplier, cust_type, final_price = row
+                if code not in products:
+                    products[code] = {
+                        'product_code': code,
+                        'product_name': name,
+                        'base_price': float(base_price),
+                        'pricing': {}
+                    }
+                products[code]['pricing'][term] = {
+                    'multiplier': float(multiplier),
+                    'price': float(final_price)
+                }
+
+            return {
+                'success': True,
+                'products': list(products.values()),
+                'data_source': 'database'
+            }
+
+    except Exception as e:
+        print(f"Database error: {e}")
+
+    # Fallback to hardcoded data
+    products = []
+    for product_type, config in HERO_PRODUCTS_PRICING.items():
+        product = {
+            'product_type': product_type,
+            'base_price': config['base_price'],
+            'pricing': {}
+        }
+        for term, multiplier in config['multipliers'].items():
+            product['pricing'][term] = {
+                'multiplier': multiplier,
+                'price': round(config['base_price'] * multiplier, 2)
+            }
+        products.append(product)
+
+    return {
+        'success': True,
+        'products': products,
+        'data_source': 'hardcoded'
+    }
+
+
+def get_contact_info():
+    """Get updated contact information"""
+    try:
+        database_url = os.environ.get('POSTGRES_URL')
+        if database_url:
+            import psycopg2
+
+            conn = psycopg2.connect(database_url)
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT key, value FROM settings WHERE key IN ('contact_phone', 'contact_email');")
+            results = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            contact_info = {}
+            for key, value in results:
+                contact_info[key.replace('contact_', '')] = value.strip('"')
+
+            if contact_info:
+                return {**contact_info, 'data_source': 'database'}
+    except:
+        pass
+
+    # Fallback to hardcoded
+    return CONTACT_INFO
+
 
 def get_hero_pricing():
     """Get Hero products pricing configuration"""
     return HERO_PRODUCTS_PRICING
 
-def get_available_terms(product_type):
-    """Get available terms for a specific product type"""
-    if product_type in HERO_PRODUCTS_PRICING:
-        return list(HERO_PRODUCTS_PRICING[product_type]['multipliers'].keys())
-    return []
+# Backward compatibility functions
 
-def calculate_hero_price(product_type, term_years, coverage_limit=500, customer_type='retail'):
-    """
-    Calculate Hero product price
-    
-    Args:
-        product_type (str): Type of Hero product
-        term_years (int): Coverage term in years
-        coverage_limit (int): Coverage limit (500 or 1000)
-        customer_type (str): 'retail' or 'wholesale'
-        
-    Returns:
-        dict: Price calculation result
-    """
-    try:
-        if product_type not in HERO_PRODUCTS_PRICING:
-            return {'success': False, 'error': f'Unknown product type: {product_type}'}
-        
-        config = HERO_PRODUCTS_PRICING[product_type]
-        
-        if term_years not in config['multipliers']:
-            return {'success': False, 'error': f'Invalid term: {term_years}'}
-        
-        base_price = config['base_price']
-        term_multiplier = config['multipliers'][term_years]
-        coverage_multiplier = 1.2 if coverage_limit == 1000 else 1.0
-        
-        subtotal = base_price * term_multiplier * coverage_multiplier
-        
-        if customer_type == 'wholesale':
-            subtotal *= 0.85  # 15% wholesale discount
-        
+
+def get_hero_products():
+    """Maintain backward compatibility"""
+    return get_all_products_pricing()
+
+
+def get_hero_product_by_code(product_code):
+    """Get specific product info"""
+    result = get_price_from_db_or_fallback(
+        product_code, 1, 'retail')  # Get base info
+    if result['success']:
         return {
-            'success': True,
-            'base_price': base_price,
-            'term_multiplier': term_multiplier,
-            'coverage_multiplier': coverage_multiplier,
-            'subtotal': round(subtotal, 2),
-            'customer_type': customer_type
+            'product_code': product_code,
+            'base_price': result['base_price'],
+            'data_source': result['data_source']
         }
-        
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
-
+    return None
