@@ -10,10 +10,33 @@ import uuid
 from datetime import datetime
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from werkzeug.utils import secure_filename
+
+# Database configuration
+DATABASE_URL = os.environ.get(
+    'DATABASE_URL', 'postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require')
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
+
+# Configure upload settings
+UPLOAD_FOLDER = 'uploads/videos'
+ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'webm', 'mov', 'avi'}
+ALLOWED_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif'}
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+
+# Ensure upload directory exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename, file_type='video'):
+    if file_type == 'video':
+        return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
+    elif file_type == 'image':
+        return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+    return False
 
 # Initialize Flask app at module level for Vercel
 app = Flask(__name__)
@@ -1065,13 +1088,13 @@ def get_customer_dashboard():
     """Customer-specific dashboard with limited data"""
     try:
         customer_user_id = request.current_user.get('user_id')
-        
+
         # Filter data to only show customer's own information
-        customer_transactions = [t for t in transactions_db.values() 
-                               if t.get('customer_id') == customer_user_id]
-        customer_policies = [p for p in policies_db.values() 
-                           if p.get('customer_id') == customer_user_id]
-        
+        customer_transactions = [t for t in transactions_db.values()
+                                 if t.get('customer_id') == customer_user_id]
+        customer_policies = [p for p in policies_db.values()
+                             if p.get('customer_id') == customer_user_id]
+
         # Return limited dashboard data
         return jsonify({
             'customer_metrics': {
@@ -1215,6 +1238,1032 @@ def update_user_status(user_id):
 
     except Exception as e:
         return jsonify({'error': f'Failed to update user status: {str(e)}'}), 500
+
+
+# ================================
+# MISSING ENDPOINTS TO ADD TO index.py
+# ================================
+
+# 1. PRICING MANAGEMENT ENDPOINTS - DATABASE VERSION
+@app.route('/api/pricing/<product_code>', methods=['GET'])
+def get_product_pricing(product_code):
+    """Get pricing for specific product - uses your database system"""
+    try:
+        from data.hero_products_data import get_price_from_db_or_fallback
+
+        term_years = request.args.get('term_years', 1, type=int)
+        customer_type = request.args.get('customer_type', 'retail')
+
+        result = get_price_from_db_or_fallback(
+            product_code, term_years, customer_type)
+
+        if result['success']:
+            return jsonify(success_response(result))
+        else:
+            return jsonify(error_response(result['error'])), 400
+
+    except Exception as e:
+        return jsonify(error_response(f"Pricing error: {str(e)}")), 500
+
+
+# Changed from /all to /products for consistency
+@app.route('/api/pricing/products', methods=['GET'])
+def get_all_products():
+    """Get all product pricing - uses your database system"""
+    try:
+        from data.hero_products_data import get_all_products_pricing
+
+        result = get_all_products_pricing()
+        return jsonify(success_response(result))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get pricing: {str(e)}")), 500
+
+
+@app.route('/api/pricing/quote', methods=['POST'])
+def generate_pricing_quote():
+    """Generate quote using database pricing"""
+    try:
+        from data.hero_products_data import calculate_hero_price
+
+        data = request.get_json()
+        if not data:
+            return jsonify(error_response("Request body is required")), 400
+
+        # Validate required fields
+        required_fields = ['product_code', 'term_years']
+        missing_fields = [
+            field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing required fields: {', '.join(missing_fields)}")), 400
+
+        # Convert product_code to product_type for the calculate_hero_price function
+        code_to_type_mapping = {
+            'HOME_PROTECTION_PLAN': 'home_protection',
+            'COMPREHENSIVE_AUTO_PROTECTION': 'comprehensive_auto_protection',
+            'HOME_DEDUCTIBLE_REIMBURSEMENT': 'home_deductible_reimbursement',
+            'AUTO_ADVANTAGE_DEDUCTIBLE_REIMBURSEMENT': 'auto_advantage_deductible_reimbursement',
+            'MULTI_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'multi_vehicle_deductible_reimbursement',
+            'ALL_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'all_vehicle_deductible_reimbursement',
+            'AUTO_RV_DEDUCTIBLE_REIMBURSEMENT': 'auto_rv_deductible_reimbursement',
+            'HERO_LEVEL_HOME_PROTECTION': 'hero_level_protection_home'
+        }
+
+        product_type = code_to_type_mapping.get(
+            data['product_code'], data.get('product_type', data['product_code'].lower()))
+
+        result = calculate_hero_price(
+            product_type=product_type,
+            term_years=data['term_years'],
+            coverage_limit=data.get('coverage_limit', 500),
+            customer_type=data.get('customer_type', 'retail')
+        )
+
+        if result['success']:
+            return jsonify(success_response(result))
+        else:
+            return jsonify(error_response(result['error'])), 400
+
+    except Exception as e:
+        return jsonify(error_response(f"Quote generation error: {str(e)}")), 500
+
+
+# 2. ADMIN PRICING CONTROL ENDPOINTS - DATABASE VERSION
+@app.route('/api/admin/pricing/<product_code>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_product_pricing(product_code):
+    """Update product pricing in database (admin only)"""
+    try:
+        data = request.get_json()
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Check if product exists
+        cursor.execute(
+            'SELECT id FROM products WHERE product_code = %s;', (product_code,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product not found')), 404
+
+        # Update base price if provided
+        if 'base_price' in data:
+            cursor.execute('''
+                UPDATE products 
+                SET base_price = %s 
+                WHERE product_code = %s;
+            ''', (data['base_price'], product_code))
+
+        # Update pricing multipliers if provided
+        if 'pricing' in data:
+            for term_years, pricing_info in data['pricing'].items():
+                term = int(term_years)
+                multiplier = pricing_info.get('multiplier', pricing_info)
+
+                # Update retail pricing
+                cursor.execute('''
+                    INSERT INTO pricing (product_code, term_years, multiplier, customer_type) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (product_code, term_years, customer_type) 
+                    DO UPDATE SET multiplier = %s;
+                ''', (product_code, term, multiplier, 'retail', multiplier))
+
+                # Update wholesale pricing (15% discount)
+                wholesale_multiplier = multiplier * 0.85
+                cursor.execute('''
+                    INSERT INTO pricing (product_code, term_years, multiplier, customer_type) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (product_code, term_years, customer_type) 
+                    DO UPDATE SET multiplier = %s;
+                ''', (product_code, term, wholesale_multiplier, 'wholesale', wholesale_multiplier))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': f'Pricing updated for {product_code}',
+            'updated_data': data
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update pricing: {str(e)}")), 500
+
+
+@app.route('/api/admin/products', methods=['POST'])
+@token_required
+@role_required('admin')
+def create_product():
+    """Create new product in database (admin only)"""
+    try:
+        data = request.get_json()
+
+        # Validate required fields
+        required_fields = ['product_code', 'product_name', 'base_price']
+        missing_fields = [
+            field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Check if product already exists
+        cursor.execute(
+            'SELECT id FROM products WHERE product_code = %s;', (data['product_code'],))
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product already exists')), 409
+
+        # Insert new product
+        cursor.execute('''
+            INSERT INTO products (product_code, product_name, base_price, active) 
+            VALUES (%s, %s, %s, %s)
+            RETURNING id;
+        ''', (
+            data['product_code'],
+            data['product_name'],
+            data['base_price'],
+            data.get('active', True)
+        ))
+
+        product_id = cursor.fetchone()[0]
+
+        # Insert default pricing if provided
+        if 'pricing' in data:
+            for term_years, multiplier in data['pricing'].items():
+                term = int(term_years)
+
+                # Insert retail pricing
+                cursor.execute('''
+                    INSERT INTO pricing (product_code, term_years, multiplier, customer_type) 
+                    VALUES (%s, %s, %s, %s);
+                ''', (data['product_code'], term, multiplier, 'retail'))
+
+                # Insert wholesale pricing (15% discount)
+                wholesale_multiplier = multiplier * 0.85
+                cursor.execute('''
+                    INSERT INTO pricing (product_code, term_years, multiplier, customer_type) 
+                    VALUES (%s, %s, %s, %s);
+                ''', (data['product_code'], term, wholesale_multiplier, 'wholesale'))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': 'Product created successfully',
+            'product': {
+                'id': product_id,
+                **data
+            }
+        })), 201
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create product: {str(e)}")), 500
+
+
+@app.route('/api/admin/products', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_all_admin_products():
+    """Get all products with complete pricing data for admin management"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get products with their complete pricing data
+        cursor.execute('''
+            SELECT 
+                p.id,
+                p.product_code,
+                p.product_name,
+                p.base_price,
+                p.active,
+                p.created_at,
+                -- Get retail pricing as JSON
+                COALESCE(
+                    JSON_OBJECT_AGG(
+                        pr.term_years::text, 
+                        JSON_BUILD_OBJECT(
+                            'price', ROUND(p.base_price * pr.multiplier, 2),
+                            'base_price', p.base_price,
+                            'multiplier', pr.multiplier,
+                            'term_years', pr.term_years
+                        )
+                    ) FILTER (WHERE pr.customer_type = 'retail'),
+                    '{}'::json
+                ) as pricing,
+                -- Get available terms
+                COALESCE(
+                    ARRAY_AGG(DISTINCT pr.term_years ORDER BY pr.term_years) 
+                    FILTER (WHERE pr.customer_type = 'retail'),
+                    ARRAY[]::integer[]
+                ) as terms_available,
+                -- Calculate min/max prices for retail
+                COALESCE(
+                    MIN(ROUND(p.base_price * pr.multiplier, 2)) 
+                    FILTER (WHERE pr.customer_type = 'retail'),
+                    p.base_price
+                ) as min_price,
+                COALESCE(
+                    MAX(ROUND(p.base_price * pr.multiplier, 2)) 
+                    FILTER (WHERE pr.customer_type = 'retail'),
+                    p.base_price
+                ) as max_price,
+                COUNT(pr.id) as pricing_count
+            FROM products p
+            LEFT JOIN pricing pr ON p.product_code = pr.product_code
+            WHERE p.active = true
+            GROUP BY p.id, p.product_code, p.product_name, p.base_price, p.active, p.created_at
+            ORDER BY p.created_at DESC;
+        ''')
+        
+        products = cursor.fetchall()
+        
+        # Convert to proper format for frontend
+        processed_products = []
+        for product in products:
+            # Convert to dict and handle data types
+            product_dict = dict(product)
+            product_dict['base_price'] = float(product_dict['base_price'])
+            product_dict['min_price'] = float(product_dict['min_price'])
+            product_dict['max_price'] = float(product_dict['max_price'])
+            
+            # Convert pricing values to floats
+            if product_dict['pricing']:
+                for term, pricing_info in product_dict['pricing'].items():
+                    pricing_info['price'] = float(pricing_info['price'])
+                    pricing_info['base_price'] = float(pricing_info['base_price'])
+                    pricing_info['multiplier'] = float(pricing_info['multiplier'])
+            
+            # Add product_type for compatibility
+            code_to_type_mapping = {
+                'HOME_PROTECTION_PLAN': 'home_protection',
+                'COMPREHENSIVE_AUTO_PROTECTION': 'comprehensive_auto_protection',
+                'HOME_DEDUCTIBLE_REIMBURSEMENT': 'home_deductible_reimbursement',
+                'AUTO_ADVANTAGE_DEDUCTIBLE_REIMBURSEMENT': 'auto_advantage_deductible_reimbursement',
+                'MULTI_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'multi_vehicle_deductible_reimbursement',
+                'ALL_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'all_vehicle_deductible_reimbursement',
+                'AUTO_RV_DEDUCTIBLE_REIMBURSEMENT': 'auto_rv_deductible_reimbursement',
+                'HERO_LEVEL_HOME_PROTECTION': 'hero_level_protection_home'
+            }
+            
+            product_dict['product_type'] = code_to_type_mapping.get(
+                product_dict['product_code'], 
+                product_dict['product_code'].lower()
+            )
+            
+            processed_products.append(product_dict)
+        
+        cursor.close()
+        conn.close()
+        
+        response_data = {
+            'success': True,
+            'data': {
+                'products': processed_products,
+                'total': len(processed_products),
+                'data_source': 'database'
+            },
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }), 500
+
+
+@app.route('/api/admin/products/<product_code>', methods=['DELETE'])
+@token_required
+@role_required('admin')
+def delete_product(product_code):
+    """Delete product and its pricing (admin only)"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Check if product exists
+        cursor.execute(
+            'SELECT product_name FROM products WHERE product_code = %s;', (product_code,))
+        product = cursor.fetchone()
+        if not product:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product not found')), 404
+
+        product_name = product[0]
+
+        # Delete pricing first (foreign key constraint)
+        cursor.execute(
+            'DELETE FROM pricing WHERE product_code = %s;', (product_code,))
+
+        # Delete product
+        cursor.execute(
+            'DELETE FROM products WHERE product_code = %s;', (product_code,))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': f'Product "{product_name}" and its pricing deleted successfully'
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to delete product: {str(e)}")), 500
+
+
+# 3. TPA (THIRD PARTY ADMINISTRATOR) ENDPOINTS - DATABASE VERSION
+@app.route('/api/admin/tpas', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_tpas():
+    """Get all Third Party Administrators from database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT id, name, api_endpoint, contact_email, contact_phone, 
+                   status, supported_products, commission_rate, created_at, updated_at
+            FROM tpas 
+            ORDER BY created_at DESC;
+        ''')
+
+        rows = cursor.fetchall()
+        tpas = []
+
+        for row in rows:
+            tpa = {
+                'id': str(row[0]),
+                'name': row[1],
+                'api_endpoint': row[2],
+                'contact_email': row[3],
+                'contact_phone': row[4],
+                'status': row[5],
+                'supported_products': row[6] or [],
+                'commission_rate': float(row[7]) if row[7] else 0.0,
+                'created_at': row[8].isoformat() if row[8] else None,
+                'updated_at': row[9].isoformat() if row[9] else None
+            }
+            tpas.append(tpa)
+
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({'tpas': tpas}))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get TPAs: {str(e)}")), 500
+
+
+@app.route('/api/admin/tpas', methods=['POST'])
+@token_required
+@role_required('admin')
+def create_tpa():
+    """Add new TPA provider to database"""
+    try:
+        data = request.get_json()
+
+        required_fields = ['name', 'api_endpoint', 'contact_email']
+        missing_fields = [
+            field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Insert new TPA
+        cursor.execute('''
+            INSERT INTO tpas (name, api_endpoint, contact_email, contact_phone, 
+                            status, supported_products, commission_rate) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, created_at;
+        ''', (
+            data['name'],
+            data['api_endpoint'],
+            data['contact_email'],
+            data.get('contact_phone', ''),
+            data.get('status', 'active'),
+            data.get('supported_products', []),
+            data.get('commission_rate', 0.15)
+        ))
+
+        tpa_id, created_at = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': 'TPA created successfully',
+            'tpa': {
+                'id': str(tpa_id),
+                'created_at': created_at.isoformat(),
+                **data
+            }
+        })), 201
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create TPA: {str(e)}")), 500
+
+
+@app.route('/api/admin/tpas/<tpa_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_tpa(tpa_id):
+    """Update existing TPA in database"""
+    try:
+        data = request.get_json()
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Check if TPA exists
+        cursor.execute('SELECT id FROM tpas WHERE id = %s;', (tpa_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('TPA not found')), 404
+
+        # Build dynamic UPDATE query based on provided fields
+        update_fields = []
+        values = []
+
+        allowed_fields = ['name', 'api_endpoint', 'contact_email', 'contact_phone',
+                          'status', 'supported_products', 'commission_rate']
+
+        for field in allowed_fields:
+            if field in data:
+                update_fields.append(f"{field} = %s")
+                values.append(data[field])
+
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+
+        # Add updated_at
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(tpa_id)
+
+        query = f"UPDATE tpas SET {', '.join(update_fields)} WHERE id = %s RETURNING updated_at;"
+        cursor.execute(query, values)
+
+        updated_at = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': f'TPA {tpa_id} updated successfully',
+            'tpa': {
+                'id': tpa_id,
+                'updated_at': updated_at.isoformat(),
+                **data
+            }
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update TPA: {str(e)}")), 500
+
+
+@app.route('/api/admin/tpas/<tpa_id>', methods=['DELETE'])
+@token_required
+@role_required('admin')
+def delete_tpa(tpa_id):
+    """Delete TPA from database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Check if TPA exists
+        cursor.execute('SELECT name FROM tpas WHERE id = %s;', (tpa_id,))
+        tpa = cursor.fetchone()
+        if not tpa:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('TPA not found')), 404
+
+        tpa_name = tpa[0]
+
+        # Delete TPA
+        cursor.execute('DELETE FROM tpas WHERE id = %s;', (tpa_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': f'TPA "{tpa_name}" deleted successfully'
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to delete TPA: {str(e)}")), 500
+
+
+# 4. QUOTE ROUTING TO TPA ENDPOINTS - DATABASE VERSION
+@app.route('/api/quotes/route/<tpa_id>', methods=['POST'])
+def route_quote_to_tpa(tpa_id):
+    """Route quote to specific TPA using database"""
+    try:
+        data = request.get_json()
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Verify TPA exists and is active
+        cursor.execute('''
+            SELECT id, name, api_endpoint, status 
+            FROM tpas 
+            WHERE id = %s;
+        ''', (tpa_id,))
+
+        tpa = cursor.fetchone()
+        if not tpa:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('TPA not found')), 404
+
+        if tpa[3] != 'active':
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('TPA is not active')), 400
+
+        tpa_name = tpa[1]
+        api_endpoint = tpa[2]
+
+        # Generate quote routing record (you could add a quotes table later)
+        quote_id = f'Q-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{tpa_id[:8]}'
+
+        cursor.close()
+        conn.close()
+
+        # In a real system, you would make an HTTP request to the TPA's API endpoint here
+        # For now, return success response
+        return jsonify(success_response({
+            'message': f'Quote routed to TPA "{tpa_name}"',
+            'quote_id': quote_id,
+            'tpa_reference': f'TPA-{tpa_id}-REF',
+            'tpa_endpoint': api_endpoint,
+            'quote_data': data
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to route quote: {str(e)}")), 500
+
+
+# 5. ADMIN SETTINGS ENDPOINTS - DATABASE VERSION
+@app.route('/api/admin/settings', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_admin_settings():
+    """Get admin configurable settings from database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT category, key, value 
+            FROM admin_settings 
+            ORDER BY category, key;
+        ''')
+
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        # Organize settings by category
+        settings = {}
+        for category, key, value in rows:
+            if category not in settings:
+                settings[category] = {}
+
+            # Parse JSON values, handle numeric strings
+            if isinstance(value, str):
+                try:
+                    # Try to parse as number first
+                    if '.' in value:
+                        settings[category][key] = float(value)
+                    else:
+                        settings[category][key] = int(value)
+                except ValueError:
+                    # If not a number, keep as string (remove quotes if present)
+                    settings[category][key] = value.strip('"')
+            else:
+                settings[category][key] = value
+
+        return jsonify(success_response(settings))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get settings: {str(e)}")), 500
+
+
+@app.route('/api/admin/settings', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_admin_settings():
+    """Update admin settings in database"""
+    try:
+        data = request.get_json()
+        user_id = request.current_user.get('user_id')
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Update each setting category
+        for category, settings in data.items():
+            for key, value in settings.items():
+                # Convert value to JSON string for storage
+                json_value = str(value) if isinstance(
+                    value, (int, float)) else f'"{value}"'
+
+                cursor.execute('''
+                    INSERT INTO admin_settings (category, key, value, updated_by) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (category, key) 
+                    DO UPDATE SET 
+                        value = %s, 
+                        updated_at = CURRENT_TIMESTAMP, 
+                        updated_by = %s;
+                ''', (category, key, json_value, user_id, json_value, user_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': 'Settings updated successfully',
+            'updated_settings': data
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update settings: {str(e)}")), 500
+
+
+# 6. VIDEO MANAGEMENT ENDPOINTS - DATABASE VERSION
+@app.route('/api/admin/video', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_landing_video():
+    """Get current landing page video from database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Get video settings from admin_settings table
+        cursor.execute('''
+            SELECT key, value 
+            FROM admin_settings 
+            WHERE category = 'video';
+        ''')
+
+        video_settings = {}
+        for key, value in cursor.fetchall():
+            # Remove quotes from JSON strings
+            video_settings[key] = value.strip(
+                '"') if isinstance(value, str) else value
+
+        cursor.close()
+        conn.close()
+
+        # Provide defaults if not in database
+        video_info = {
+            'video_url': video_settings.get('landing_page_url', 'https://cdn.connectedautocare.com/videos/hero-2025.mp4'),
+            'thumbnail_url': video_settings.get('landing_page_thumbnail', 'https://cdn.connectedautocare.com/thumbnails/hero-2025.jpg'),
+            'title': video_settings.get('landing_page_title', 'ConnectedAutoCare Hero Protection 2025'),
+            'description': video_settings.get('landing_page_description', 'Showcase of our comprehensive protection plans'),
+            'duration': video_settings.get('landing_page_duration', '2:30'),
+            'updated_at': video_settings.get('last_updated', datetime.utcnow().isoformat() + 'Z')
+        }
+
+        return jsonify(success_response(video_info))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get video: {str(e)}")), 500
+
+
+@app.route('/api/admin/video', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_landing_video():
+    """Update landing page video in database"""
+    try:
+        data = request.get_json()
+        user_id = request.current_user.get('user_id')
+
+        required_fields = ['video_url']
+        missing_fields = [
+            field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Map form fields to database keys
+        field_mapping = {
+            'video_url': 'landing_page_url',
+            'thumbnail_url': 'landing_page_thumbnail',
+            'title': 'landing_page_title',
+            'description': 'landing_page_description',
+            'duration': 'landing_page_duration'
+        }
+
+        # Update each video setting
+        for form_field, db_key in field_mapping.items():
+            if form_field in data:
+                value = f'"{data[form_field]}"'  # Store as JSON string
+
+                cursor.execute('''
+                    INSERT INTO admin_settings (category, key, value, updated_by) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (category, key) 
+                    DO UPDATE SET 
+                        value = %s, 
+                        updated_at = CURRENT_TIMESTAMP, 
+                        updated_by = %s;
+                ''', ('video', db_key, value, user_id, value, user_id))
+
+        # Update last_updated timestamp
+        cursor.execute('''
+            INSERT INTO admin_settings (category, key, value, updated_by) 
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (category, key) 
+            DO UPDATE SET 
+                value = %s, 
+                updated_at = CURRENT_TIMESTAMP, 
+                updated_by = %s;
+        ''', ('video', 'last_updated', f'"{datetime.utcnow().isoformat()}Z"', user_id, f'"{datetime.utcnow().isoformat()}Z"', user_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': 'Landing page video updated successfully',
+            'video_info': data
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update video: {str(e)}")), 500
+
+
+# 7. CONTACT INFO MANAGEMENT - DATABASE VERSION
+@app.route('/api/contact', methods=['GET'])
+def get_contact_info():
+    """Get current contact information from database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Get contact info from settings table
+        cursor.execute('''
+            SELECT key, value 
+            FROM settings 
+            WHERE key IN ('contact_phone', 'contact_email')
+            UNION ALL
+            SELECT key, value 
+            FROM admin_settings 
+            WHERE category = 'contact';
+        ''')
+
+        contact_data = {}
+        for key, value in cursor.fetchall():
+            # Remove quotes from JSON strings
+            contact_data[key] = value.strip(
+                '"') if isinstance(value, str) else value
+
+        cursor.close()
+        conn.close()
+
+        contact_info = {
+            'phone': contact_data.get('contact_phone', '1-(866) 660-7003'),
+            'email': contact_data.get('contact_email', 'support@connectedautocare.com'),
+            'support_hours': contact_data.get('support_hours', '24/7'),
+            'data_source': 'database'
+        }
+
+        return jsonify(success_response(contact_info))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get contact info: {str(e)}")), 500
+
+
+@app.route('/api/admin/contact', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_contact_info():
+    """Update contact information in database"""
+    try:
+        data = request.get_json()
+        user_id = request.current_user.get('user_id')
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Update contact info in both tables for compatibility
+        if 'phone' in data:
+            # Update in settings table
+            cursor.execute('''
+                INSERT INTO settings (key, value) 
+                VALUES (%s, %s)
+                ON CONFLICT (key) 
+                DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP;
+            ''', ('contact_phone', f'"{data["phone"]}"', f'"{data["phone"]}"'))
+
+            # Update in admin_settings table
+            cursor.execute('''
+                INSERT INTO admin_settings (category, key, value, updated_by) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (category, key) 
+                DO UPDATE SET 
+                    value = %s, 
+                    updated_at = CURRENT_TIMESTAMP, 
+                    updated_by = %s;
+            ''', ('contact', 'phone', f'"{data["phone"]}"', user_id, f'"{data["phone"]}"', user_id))
+
+        if 'email' in data:
+            # Update in settings table
+            cursor.execute('''
+                INSERT INTO settings (key, value) 
+                VALUES (%s, %s)
+                ON CONFLICT (key) 
+                DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP;
+            ''', ('contact_email', f'"{data["email"]}"', f'"{data["email"]}"'))
+
+            # Update in admin_settings table
+            cursor.execute('''
+                INSERT INTO admin_settings (category, key, value, updated_by) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (category, key) 
+                DO UPDATE SET 
+                    value = %s, 
+                    updated_at = CURRENT_TIMESTAMP, 
+                    updated_by = %s;
+            ''', ('contact', 'email', f'"{data["email"]}"', user_id, f'"{data["email"]}"', user_id))
+
+        if 'support_hours' in data:
+            cursor.execute('''
+                INSERT INTO admin_settings (category, key, value, updated_by) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (category, key) 
+                DO UPDATE SET 
+                    value = %s, 
+                    updated_at = CURRENT_TIMESTAMP, 
+                    updated_by = %s;
+            ''', ('contact', 'support_hours', f'"{data["support_hours"]}"', user_id, f'"{data["support_hours"]}"', user_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': 'Contact information updated successfully',
+            'updated_contact': data
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update contact info: {str(e)}")), 500
+
+
+# 8. DEALER-SPECIFIC PRICING - DATABASE VERSION
+@app.route('/api/admin/dealer-pricing/<dealer_id>', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_dealer_pricing(dealer_id):
+    """Get dealer-specific pricing overrides from database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT name, pricing_overrides, volume_discounts 
+            FROM dealers 
+            WHERE id = %s;
+        ''', (dealer_id,))
+
+        dealer = cursor.fetchone()
+        if not dealer:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Dealer not found')), 404
+
+        name, pricing_overrides, volume_discounts = dealer
+
+        cursor.close()
+        conn.close()
+
+        dealer_pricing = {
+            'dealer_id': dealer_id,
+            'dealer_name': name,
+            'overrides': pricing_overrides or {},
+            'volume_discounts': volume_discounts or {}
+        }
+
+        return jsonify(success_response(dealer_pricing))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get dealer pricing: {str(e)}")), 500
+
+
+@app.route('/api/admin/dealer-pricing/<dealer_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_dealer_pricing(dealer_id):
+    """Update dealer-specific pricing in database"""
+    try:
+        data = request.get_json()
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Check if dealer exists
+        cursor.execute('SELECT id FROM dealers WHERE id = %s;', (dealer_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Dealer not found')), 404
+
+        # Update dealer pricing
+        update_fields = []
+        values = []
+
+        if 'overrides' in data:
+            update_fields.append('pricing_overrides = %s')
+            values.append(data['overrides'])
+
+        if 'volume_discounts' in data:
+            update_fields.append('volume_discounts = %s')
+            values.append(data['volume_discounts'])
+
+        if update_fields:
+            update_fields.append('updated_at = CURRENT_TIMESTAMP')
+            values.append(dealer_id)
+
+            query = f"UPDATE dealers SET {', '.join(update_fields)} WHERE id = %s;"
+            cursor.execute(query, values)
+            conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        return jsonify(success_response({
+            'message': f'Dealer pricing updated for {dealer_id}',
+            'updated_pricing': data
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update dealer pricing: {str(e)}")), 500
+
 
 # ================================
 # ADMIN API REGISTRATION
