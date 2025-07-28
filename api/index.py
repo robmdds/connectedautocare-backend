@@ -21,7 +21,7 @@ import requests
 DATABASE_URL = os.environ.get(
     'DATABASE_URL', 'postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require')
 
-VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get('VERCEL_BLOB_READ_WRITE_TOKEN')
+VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN', "vercel_blob_rw_NyJGOwmGasD868JR_SRRTKZEvjyrFPjJKXt8v4HwARx9Qmy")
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
