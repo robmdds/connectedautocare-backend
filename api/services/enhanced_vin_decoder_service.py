@@ -142,9 +142,7 @@ class EnhancedVINDecoderService:
             return self._validation_error(f'VIN validation error: {str(e)}')
     
     def decode_vin(self, vin: str) -> Dict:
-        """
-        Enhanced VIN decoding with eligibility checking
-        """
+        """Enhanced VIN decoding with eligibility checking"""
         try:
             # First validate the VIN
             validation_result = self.validate_vin(vin)
@@ -158,17 +156,16 @@ class EnhancedVINDecoderService:
             vds = vin[3:9]  # Vehicle Descriptor Section
             vis = vin[9:]   # Vehicle Identifier Section
             
-            # Decode basic information
-            make = self._decode_manufacturer(wmi)
-            year = self._decode_year(vin[9])
-            
-            # Try external API for detailed information
+            # Try external API for detailed information first
             detailed_info = self._try_external_decode(vin)
             
             if detailed_info and detailed_info.get('success'):
                 vehicle_info = detailed_info['vehicle_info']
             else:
                 # Fallback to basic decoding
+                make = self._decode_manufacturer(wmi)
+                year = self._decode_year(vin[9])  # Position 10 (index 9)
+                
                 vehicle_info = {
                     'vin': vin,
                     'make': make,
@@ -186,9 +183,19 @@ class EnhancedVINDecoderService:
                     'decode_method': 'basic_structure'
                 }
             
-            # Calculate vehicle age
+            # Calculate vehicle age properly
             current_year = datetime.now().year
-            vehicle_age = current_year - year if year else None
+            year = vehicle_info.get('year')
+            if year:
+                vehicle_age = current_year - year
+                # Validate age is reasonable (not negative, not more than 50 years)
+                if vehicle_age < 0:
+                    vehicle_age = 0
+                elif vehicle_age > 50:
+                    # Might be wrong year due to 30-year cycle confusion
+                    vehicle_age = current_year - (year + 30) if year + 30 <= current_year else vehicle_age
+            else:
+                vehicle_age = None
             
             # Add calculated fields
             vehicle_info.update({
@@ -440,14 +447,31 @@ class EnhancedVINDecoderService:
         """Enhanced model year decoding with 30-year cycle handling"""
         current_year = datetime.now().year
         
-        if year_char in self.year_mappings:
-            decoded_year = self.year_mappings[year_char]
+        # Updated year mappings to handle current timeframe properly
+        year_mappings = {
+            # Letters for 2010-2030
+            'A': 2010, 'B': 2011, 'C': 2012, 'D': 2013, 'E': 2014, 'F': 2015,
+            'G': 2016, 'H': 2017, 'J': 2018, 'K': 2019, 'L': 2020, 'M': 2021,
+            'N': 2022, 'P': 2023, 'R': 2024, 'S': 2025, 'T': 2026, 'V': 2027,
+            'W': 2028, 'X': 2029, 'Y': 2030,
             
-            # Handle the 30-year cycle - if decoded year is more than 20 years ago, add 30
-            if decoded_year < current_year - 20:
-                decoded_year += 30
+            # Numbers for 2001-2009 and 2031-2039
+            '1': 2001, '2': 2002, '3': 2003, '4': 2004, '5': 2005,
+            '6': 2006, '7': 2007, '8': 2008, '9': 2009
+        }
+        
+        if year_char in year_mappings:
+            decoded_year = year_mappings[year_char]
             
-            # Validate reasonable year range
+            # For your VIN: 1HGBH41JXMN109186
+            # Position 10 is 'N' which should be 2022
+            # But if the car seems too new, it might be from the previous 30-year cycle
+            
+            # If decoded year is in the future, subtract 30 years
+            if decoded_year > current_year + 1:
+                decoded_year -= 30
+            
+            # Validate reasonable year range (1980-2030)
             if 1980 <= decoded_year <= current_year + 2:
                 return decoded_year
         
@@ -474,7 +498,7 @@ class EnhancedVINDecoderService:
             return None
     
     def _try_nhtsa_decode(self, vin: str) -> Optional[Dict]:
-        """Attempt to decode using NHTSA API"""
+        """Improved NHTSA API decoding with better data extraction"""
         try:
             url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/{vin}?format=json"
             response = requests.get(url, timeout=10)
@@ -491,30 +515,58 @@ class EnhancedVINDecoderService:
                         variable = result.get('Variable', '')
                         value = result.get('Value', '')
                         
-                        if value and value != 'Not Applicable':
-                            if 'Make' in variable:
+                        if value and value not in ['Not Applicable', '', 'N/A']:
+                            if variable == 'Make':
                                 vehicle_info['make'] = value
-                            elif 'Model' in variable:
+                            elif variable == 'Model':
                                 vehicle_info['model'] = value
-                            elif 'Model Year' in variable:
+                            elif variable == 'Model Year':
                                 try:
                                     vehicle_info['year'] = int(value)
                                 except (ValueError, TypeError):
                                     pass
-                            elif 'Trim' in variable:
+                            elif variable == 'Trim':
                                 vehicle_info['trim'] = value
-                            elif 'Engine' in variable:
+                            elif variable == 'Engine Number of Cylinders':
+                                vehicle_info['engine_cylinders'] = value
+                            elif variable == 'Engine Model':
                                 vehicle_info['engine'] = value
-                            elif 'Transmission' in variable:
+                            elif variable == 'Transmission Style':
                                 vehicle_info['transmission'] = value
-                            elif 'Body Class' in variable:
+                            elif variable == 'Body Class':
                                 vehicle_info['body_style'] = value
-                            elif 'Fuel Type' in variable:
+                            elif variable == 'Fuel Type - Primary':
                                 vehicle_info['fuel_type'] = value
+                            elif variable == 'Vehicle Type':
+                                vehicle_info['vehicle_type'] = value
                     
-                    # Add decode method
-                    vehicle_info['decode_method'] = 'nhtsa_api'
-                    vehicle_info['vin'] = vin
+                    # If NHTSA didn't provide year, decode from VIN position 10
+                    if 'year' not in vehicle_info:
+                        decoded_year = self._decode_year(vin[9])
+                        if decoded_year:
+                            vehicle_info['year'] = decoded_year
+                    
+                    # If NHTSA didn't provide make, decode from WMI
+                    if 'make' not in vehicle_info:
+                        vehicle_info['make'] = self._decode_manufacturer(vin[:3])
+                    
+                    # Clean up the model field - sometimes NHTSA returns year as model
+                    if 'model' in vehicle_info and vehicle_info['model'].isdigit():
+                        year_from_model = int(vehicle_info['model'])
+                        if 1980 <= year_from_model <= 2030:
+                            # If model is actually a year, use it and clear model
+                            if 'year' not in vehicle_info:
+                                vehicle_info['year'] = year_from_model
+                            vehicle_info['model'] = 'Model information not available'
+                    
+                    # Add VIN structure info
+                    vehicle_info.update({
+                        'vin': vin,
+                        'wmi': vin[:3],
+                        'vds': vin[3:9],
+                        'vis': vin[9:],
+                        'decode_method': 'nhtsa_api'
+                    })
                     
                     return {
                         'success': True,
