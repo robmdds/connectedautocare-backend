@@ -13,30 +13,144 @@ from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from werkzeug.utils import secure_filename
+from PIL import Image
+import io
+import requests
 
 # Database configuration
 DATABASE_URL = os.environ.get(
     'DATABASE_URL', 'postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require')
+
+VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get('VERCEL_BLOB_READ_WRITE_TOKEN')
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
 # Configure upload settings
-UPLOAD_FOLDER = 'uploads/videos'
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'webm', 'mov', 'avi'}
-ALLOWED_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif'}
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+ALLOWED_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
+MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_IMAGE_SIZE = 10 * 1024 * 1024   # 10MB
 
-# Ensure upload directory exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename, file_type='video'):
+    """Check if file type is allowed"""
+    if not filename or '.' not in filename:
+        return False
+    
+    extension = filename.rsplit('.', 1)[1].lower()
+    
     if file_type == 'video':
-        return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
+        return extension in ALLOWED_VIDEO_EXTENSIONS
     elif file_type == 'image':
-        return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+        return extension in ALLOWED_IMAGE_EXTENSIONS
     return False
+
+def validate_file_size(file, file_type):
+    """Validate file size"""
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+    
+    max_size = MAX_VIDEO_SIZE if file_type == 'video' else MAX_IMAGE_SIZE
+    
+    if file_size > max_size:
+        max_mb = max_size / (1024 * 1024)
+        return False, f"File too large. Maximum size: {max_mb}MB"
+    
+    return True, "File size OK"
+
+def optimize_image(file):
+    """Optimize image for web delivery"""
+    try:
+        image = Image.open(file)
+        
+        # Convert to RGB if necessary
+        if image.mode in ('RGBA', 'P'):
+            image = image.convert('RGB')
+        
+        # Resize if too large (max 1920x1080 for thumbnails)
+        max_width, max_height = 1920, 1080
+        if image.width > max_width or image.height > max_height:
+            image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+        
+        # Save optimized version
+        output = io.BytesIO()
+        image.save(output, format='JPEG', quality=85, optimize=True)
+        output.seek(0)
+        
+        return output
+    except Exception as e:
+        print(f"Image optimization failed: {e}")
+        file.seek(0)
+        return file
+
+def upload_to_vercel_blob(file, file_type, filename_prefix="hero"):
+    """Upload file to Vercel Blob Storage"""
+    try:
+        if not VERCEL_BLOB_READ_WRITE_TOKEN:
+            return {'success': False, 'error': 'Vercel Blob token not configured'}
+        
+        # Generate unique filename
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        unique_id = str(uuid.uuid4())[:8]
+        file_extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'bin'
+        
+        filename = f"{filename_prefix}_{file_type}_{timestamp}_{unique_id}.{file_extension}"
+        
+        # Vercel Blob API endpoint
+        url = f"https://blob.vercel-storage.com/{filename}"
+        
+        # Prepare headers
+        headers = {
+            'Authorization': f'Bearer {VERCEL_BLOB_READ_WRITE_TOKEN}',
+            'X-Content-Type': file.content_type or 'application/octet-stream'
+        }
+        
+        # Read file content
+        file_content = file.read()
+        file.seek(0)  # Reset file pointer
+        
+        # Upload to Vercel Blob
+        response = requests.put(url, data=file_content, headers=headers)
+        
+        if response.status_code in [200, 201]:
+            result = response.json()
+            return {
+                'success': True,
+                'url': result.get('url', url),
+                'filename': filename,
+                'size': len(file_content)
+            }
+        else:
+            return {
+                'success': False, 
+                'error': f'Upload failed: {response.status_code} - {response.text}'
+            }
+            
+    except Exception as e:
+        return {'success': False, 'error': f'Upload error: {str(e)}'}
+
+def delete_from_vercel_blob(file_url):
+    """Delete file from Vercel Blob Storage"""
+    try:
+        if not VERCEL_BLOB_READ_WRITE_TOKEN:
+            return {'success': False, 'error': 'Vercel Blob token not configured'}
+        
+        headers = {
+            'Authorization': f'Bearer {VERCEL_BLOB_READ_WRITE_TOKEN}'
+        }
+        
+        response = requests.delete(file_url, headers=headers)
+        
+        return {
+            'success': response.status_code in [200, 204],
+            'status_code': response.status_code
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
 
 # Initialize Flask app at module level for Vercel
 app = Flask(__name__)
@@ -202,6 +316,14 @@ except ImportError as e:
 
         def export_to_json(self, data):
             return {"message": "JSON export not available"}
+
+try:
+    from services.enhanced_vin_decoder_service import EnhancedVINDecoderService
+    enhanced_vin_service = EnhancedVINDecoderService()
+    enhanced_vin_available = True
+except ImportError as e:
+    print(f"Enhanced VIN service not available: {e}")
+    enhanced_vin_available = False
 
 # App configuration
 app.config.update(
@@ -401,20 +523,23 @@ else:
 def health_check():
     """Main health check endpoint"""
     return jsonify({
-        "service": "ConnectedAutoCare Unified Platform",
+        "service": "ConnectedAutoCare Unified Platform with VIN Auto-Detection",
         "status": "healthy",
-        "version": "3.0.0",
+        "version": "4.0.0",
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "environment": "production",
         "components": {
             "customer_api": "available" if customer_services_available else "unavailable",
             "admin_panel": "available" if admin_modules_available else "unavailable",
-            "user_management": "available" if user_management_available else "unavailable"
+            "user_management": "available" if user_management_available else "unavailable",
+            "enhanced_vin_decoder": "available" if enhanced_vin_available else "basic_only"
         },
         "features": [
             "Hero Products & Quotes",
-            "VSC Rating Engine",
-            "VIN Decoder",
+            "VSC Rating Engine with VIN Auto-Detection",
+            "Enhanced VIN Decoder with Eligibility Rules",
+            "Vehicle Auto-Population",
+            "Real-time Eligibility Checking",
             "Multi-tier Authentication",
             "Customer Database",
             "Wholesale Reseller Portal",
@@ -555,9 +680,14 @@ def vsc_health():
     try:
         coverage_options = get_vsc_coverage_options()
         return jsonify({
-            "service": "VSC Rating API",
+            "service": "VSC Rating API with VIN Auto-Detection",
             "status": "healthy",
             "coverage_levels": list(coverage_options.keys()) if coverage_options else [],
+            "enhanced_features": {
+                "vin_auto_detection": enhanced_vin_available,
+                "eligibility_checking": enhanced_vin_available,
+                "auto_population": enhanced_vin_available
+            },
             "timestamp": datetime.utcnow().isoformat() + "Z"
         })
     except Exception as e:
@@ -579,7 +709,7 @@ def get_vsc_coverage():
 
 @app.route('/api/vsc/quote', methods=['POST'])
 def generate_vsc_quote():
-    """Generate VSC quote based on vehicle information"""
+    """Generate VSC quote based on vehicle information (enhanced with VIN support)"""
     if not customer_services_available:
         return jsonify({"error": "VSC rating service not available"}), 503
 
@@ -588,34 +718,225 @@ def generate_vsc_quote():
         if not data:
             return jsonify({"error": "Request body is required"}), 400
 
+        # Check if this is a VIN-based quote request
+        vin = data.get('vin', '').strip().upper()
+        
+        # If VIN provided and enhanced service available, try VIN-based approach first
+        if vin and enhanced_vin_available:
+            try:
+                # Decode VIN and populate missing fields
+                vin_result = enhanced_vin_service.decode_vin(vin)
+                if vin_result.get('success'):
+                    vehicle_info = vin_result['vehicle_info']
+                    
+                    # Use VIN data to fill missing fields
+                    if not data.get('make'):
+                        data['make'] = vehicle_info.get('make', '')
+                    if not data.get('model'):
+                        data['model'] = vehicle_info.get('model', '')
+                    if not data.get('year'):
+                        data['year'] = vehicle_info.get('year', 0)
+                    
+                    # Mark as auto-populated
+                    data['auto_populated'] = True
+                    data['vin_decoded'] = vehicle_info
+            except Exception as e:
+                print(f"VIN decode failed, continuing with manual data: {e}")
+
         # Validate required fields
         required_fields = ['make', 'year', 'mileage']
-        missing_fields = [
-            field for field in required_fields if field not in data]
+        missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
-        # Generate quote
-        quote_result = vsc_service.generate_quote(
-            make=data['make'],
-            model=data.get('model', ''),
-            year=int(data['year']),
-            mileage=int(data['mileage']),
-            coverage_level=data.get('coverage_level', 'gold'),
-            term_months=data.get('term_months', 36),
-            deductible=data.get('deductible', 100),
-            customer_type=data.get('customer_type', 'retail')
-        )
+        # Ensure proper data types before sending
+        quote_data = {
+            'make': data['make'],
+            'model': data.get('model', ''),
+            'year': int(data['year']),
+            'mileage': int(data['mileage']),
+            'coverage_level': data.get('coverage_level', 'gold'),
+            'term_months': int(data.get('term_months', 36)),
+            'deductible': int(data.get('deductible', 100)),
+            'customer_type': data.get('customer_type', 'retail')
+        }
 
-        if quote_result.get('success'):
-            return jsonify(success_response(quote_result))
+        response = vsc_service.generate_quote(**quote_data)
+        response_data = response if isinstance(response, dict) else response[0] if isinstance(response, list) else response
+
+        if response_data.get('success'):
+            # Enhance response with VIN information if available
+            enhanced_response = response_data.copy()
+            if vin:
+                enhanced_response['vin_info'] = {
+                    'vin': vin,
+                    'auto_populated': data.get('auto_populated', False),
+                    'vin_decoded': data.get('vin_decoded', {})
+                }
+            
+            return jsonify(success_response(enhanced_response))
         else:
-            return jsonify({"error": quote_result.get('error', 'VSC quote generation failed')}), 400
+            return jsonify({"error": response_data.get('error', 'VSC quote generation failed')}), 400
 
     except ValueError as e:
         return jsonify({"error": f"Invalid input data: {str(e)}"}), 400
     except Exception as e:
         return jsonify({"error": f"VSC quote error: {str(e)}"}), 500
+
+
+@app.route('/api/vsc/eligibility', methods=['POST'])
+def check_vsc_eligibility():
+    """Check VSC eligibility for a vehicle"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify(error_response("Vehicle data is required")), 400
+
+        vin = data.get('vin', '').strip().upper()
+        make = data.get('make', '').strip()
+        year = data.get('year')
+        mileage = data.get('mileage')
+
+        try:
+            year = int(year) if year else None
+            mileage = int(mileage) if mileage else None
+        except (ValueError, TypeError):
+            return jsonify(error_response("Invalid year or mileage values")), 400
+
+        if not vin and (not make or not year):
+            return jsonify(error_response("Either VIN or make/year is required")), 400
+
+        if enhanced_vin_available:
+            if vin:
+                result = enhanced_vin_service.check_vsc_eligibility(vin=vin, mileage=mileage)
+            else:
+                result = enhanced_vin_service.check_vsc_eligibility(make=make, year=year, mileage=mileage)
+        else:
+            # Basic eligibility check fallback
+            current_year = datetime.now().year
+            vehicle_age = current_year - year if year else 0
+            
+            eligible = True
+            warnings = []
+            restrictions = []
+            
+            if vehicle_age > 15:
+                eligible = False
+                restrictions.append(f"Vehicle is {vehicle_age} years old (maximum 15 years)")
+            elif vehicle_age > 10:
+                warnings.append(f"Vehicle is {vehicle_age} years old - limited options")
+                
+            if mileage and mileage > 150000:
+                eligible = False
+                restrictions.append(f"Vehicle has {mileage:,} miles (maximum 150,000)")
+            elif mileage and mileage > 125000:
+                warnings.append(f"High mileage vehicle - premium rates apply")
+            
+            result = {
+                'success': True,
+                'eligible': eligible,
+                'warnings': warnings,
+                'restrictions': restrictions,
+                'vehicle_info': {'make': make, 'year': year, 'mileage': mileage, 'vehicle_age': vehicle_age}
+            }
+
+        if result.get('success'):
+            return jsonify(success_response(result))
+        else:
+            return jsonify(error_response(result.get('error', 'Eligibility check failed'))), 400
+
+    except Exception as e:
+        return jsonify(error_response(f"Eligibility check error: {str(e)}")), 500
+
+
+@app.route('/api/vsc/quote/vin', methods=['POST'])
+def generate_vsc_quote_from_vin():
+    """Generate VSC quote using VIN auto-detection"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify(error_response("Quote data is required")), 400
+
+        vin = data.get('vin', '').strip().upper()
+        if not vin:
+            return jsonify(error_response("VIN is required for VIN-based quoting")), 400
+
+        mileage = data.get('mileage')
+        coverage_level = data.get('coverage_level', 'gold')
+        term_months = data.get('term_months', 36)
+        customer_type = data.get('customer_type', 'retail')
+        deductible = data.get('deductible', 100)
+
+        if not mileage:
+            return jsonify(error_response("Mileage is required")), 400
+
+        try:
+            mileage = int(mileage)
+            term_months = int(term_months)
+            deductible = int(deductible)
+        except (ValueError, TypeError):
+            return jsonify(error_response("Invalid numeric values provided")), 400
+
+        # Decode VIN and check eligibility
+        if enhanced_vin_available:
+            vin_result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
+            
+            if not vin_result.get('success'):
+                return jsonify(error_response(vin_result.get('error', 'VIN decode failed'))), 400
+            
+            vehicle_info = vin_result['vehicle_info']
+            eligibility = vin_result['eligibility']
+            
+            if not eligibility.get('eligible'):
+                restrictions = eligibility.get('restrictions', [])
+                return jsonify(error_response(f"Vehicle not eligible: {'; '.join(restrictions)}")), 400
+            
+            make = vehicle_info.get('make', '')
+            model = vehicle_info.get('model', '')
+            year = vehicle_info.get('year', 0)
+        else:
+            # Fallback to basic VIN decode
+            decode_result = vin_service.decode_vin(vin)
+            if not decode_result.get('success'):
+                return jsonify(error_response("Failed to decode VIN")), 400
+            
+            vehicle_info = decode_result.get('vehicle_info', {})
+            make = vehicle_info.get('make', '')
+            model = vehicle_info.get('model', '')
+            year = vehicle_info.get('year', 0)
+            
+            # Basic eligibility check
+            current_year = datetime.now().year
+            vehicle_age = current_year - year if year else 0
+            if vehicle_age > 15 or mileage > 150000:
+                return jsonify(error_response("Vehicle not eligible for VSC coverage")), 400
+
+        # Generate VSC quote
+        quote_result = vsc_service.generate_quote(
+            make=make, model=model, year=year, mileage=mileage,
+            coverage_level=coverage_level, term_months=term_months,
+            deductible=deductible, customer_type=customer_type
+        )
+
+        if quote_result.get('success'):
+            # Enhance quote with VIN information
+            quote_data = quote_result.copy()
+            quote_data['vin_info'] = {
+                'vin': vin,
+                'vehicle_info': vehicle_info,
+                'auto_populated': True,
+                'decode_method': vehicle_info.get('decode_method', 'enhanced')
+            }
+            
+            if enhanced_vin_available and 'eligibility' in vin_result:
+                quote_data['eligibility_details'] = eligibility
+                
+            return jsonify(success_response(quote_data))
+        else:
+            return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
+
+    except Exception as e:
+        return jsonify(error_response(f"VIN quote generation error: {str(e)}")), 500
 
 # VIN Decoder API
 
@@ -626,10 +947,17 @@ def vin_health():
     return jsonify({
         "service": "VIN Decoder API",
         "status": "healthy" if customer_services_available else "unavailable",
+        "enhanced_features": "available" if enhanced_vin_available else "basic_only",
         "supported_formats": ["17-character VIN"],
+        "features": {
+            "basic_decode": customer_services_available,
+            "enhanced_decode": enhanced_vin_available,
+            "eligibility_checking": enhanced_vin_available,
+            "external_api_integration": enhanced_vin_available
+        },
         "timestamp": datetime.utcnow().isoformat() + "Z"
     })
-
+    
 
 @app.route('/api/vin/validate', methods=['POST'])
 def validate_vin():
@@ -665,31 +993,89 @@ def validate_vin():
 
 @app.route('/api/vin/decode', methods=['POST'])
 def decode_vin():
-    """Decode VIN to extract vehicle information"""
-    if not customer_services_available:
-        return jsonify({"error": "VIN decoder service not available"}), 503
-
+    """Decode VIN to extract vehicle information (enhanced version)"""
     try:
         data = request.get_json()
         if not data or 'vin' not in data:
             return jsonify({"error": "VIN is required"}), 400
 
         vin = data['vin'].strip().upper()
+        include_eligibility = data.get('include_eligibility', True)
+        mileage = data.get('mileage', 0)
 
         # Validate VIN first
         if len(vin) != 17:
             return jsonify({"error": "Invalid VIN length"}), 400
 
-        # Decode VIN
-        decode_result = vin_service.decode_vin(vin)
-
-        if decode_result.get('success'):
-            return jsonify(success_response(decode_result['vehicle_info']))
+        # Use enhanced service if available
+        if enhanced_vin_available and include_eligibility:
+            result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
+        elif enhanced_vin_available:
+            result = enhanced_vin_service.decode_vin(vin)
         else:
-            return jsonify({"error": decode_result.get('error', 'VIN decode failed')}), 400
+            # Fallback to basic service
+            if not customer_services_available:
+                return jsonify({"error": "VIN decoder service not available"}), 503
+            result = vin_service.decode_vin(vin)
+
+        if result.get('success'):
+            return jsonify(success_response(result))
+        else:
+            return jsonify({"error": result.get('error', 'VIN decode failed')}), 400
 
     except Exception as e:
         return jsonify({"error": f"VIN decode error: {str(e)}"}), 500
+
+
+@app.route('/api/vin/enhanced/validate', methods=['POST'])
+def enhanced_validate_vin():
+    """Enhanced VIN validation with detailed feedback"""
+    try:
+        data = request.get_json()
+        if not data or 'vin' not in data:
+            return jsonify(error_response("VIN is required")), 400
+
+        vin = data['vin'].strip().upper()
+
+        if enhanced_vin_available:
+            result = enhanced_vin_service.validate_vin(vin)
+        else:
+            # Fallback to basic validation
+            result = vin_service.validate_vin(vin)
+
+        if result.get('success'):
+            return jsonify(success_response(result))
+        else:
+            return jsonify(error_response(result.get('error', 'VIN validation failed'))), 400
+
+    except Exception as e:
+        return jsonify(error_response(f"VIN validation error: {str(e)}")), 500
+
+
+@app.route('/api/vin/enhanced/decode', methods=['POST'])
+def enhanced_decode_vin():
+    """Enhanced VIN decoding with eligibility checking"""
+    try:
+        data = request.get_json()
+        if not data or 'vin' not in data:
+            return jsonify(error_response("VIN is required")), 400
+
+        vin = data['vin'].strip().upper()
+        mileage = data.get('mileage', 0)
+
+        if enhanced_vin_available:
+            result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
+        else:
+            # Fallback to basic decoding
+            result = vin_service.decode_vin(vin)
+
+        if result.get('success'):
+            return jsonify(success_response(result))
+        else:
+            return jsonify(error_response(result.get('error', 'VIN decode failed'))), 400
+
+    except Exception as e:
+        return jsonify(error_response(f"VIN decode error: {str(e)}")), 500
 
 # Payment and Contract Endpoints (always available)
 
@@ -2352,6 +2738,326 @@ def method_not_allowed(error):
 def internal_error(error):
     """Handle 500 errors"""
     return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+# ================================
+# Video Management
+# ================================
+@app.route('/api/admin/video/upload', methods=['POST'])
+@token_required
+@role_required('admin')
+def upload_video():
+    """Upload video file and thumbnail to Vercel Blob Storage"""
+    try:
+        # Check Vercel Blob configuration
+        if not VERCEL_BLOB_READ_WRITE_TOKEN:
+            return jsonify(error_response('Vercel Blob storage not configured. Please set VERCEL_BLOB_READ_WRITE_TOKEN environment variable.')), 500
+        
+        # Check if files are present
+        if 'video' not in request.files and 'thumbnail' not in request.files:
+            return jsonify(error_response('No files provided')), 400
+
+        video_file = request.files.get('video')
+        thumbnail_file = request.files.get('thumbnail')
+        
+        uploaded_files = {}
+        old_files_to_delete = []
+        
+        # Get current video URLs for cleanup
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT key, value 
+                FROM admin_settings 
+                WHERE category = 'video' AND key IN ('landing_page_url', 'landing_page_thumbnail');
+            ''')
+            
+            for key, value in cursor.fetchall():
+                if value and value.strip('"') and 'blob.vercel-storage.com' in value:
+                    old_files_to_delete.append(value.strip('"'))
+            
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Warning: Could not get old files for cleanup: {e}")
+        
+        # Handle video upload
+        if video_file and video_file.filename != '':
+            if not allowed_file(video_file.filename, 'video'):
+                return jsonify(error_response('Invalid video file type. Allowed: mp4, webm, mov, avi')), 400
+            
+            # Validate file size
+            size_valid, size_message = validate_file_size(video_file, 'video')
+            if not size_valid:
+                return jsonify(error_response(size_message)), 400
+            
+            # Upload to Vercel Blob
+            upload_result = upload_to_vercel_blob(video_file, 'video')
+            
+            if upload_result['success']:
+                uploaded_files['video_url'] = upload_result['url']
+                uploaded_files['video_filename'] = upload_result['filename']
+                uploaded_files['video_size'] = upload_result['size']
+            else:
+                return jsonify(error_response(f"Video upload failed: {upload_result['error']}")), 500
+        
+        # Handle thumbnail upload
+        if thumbnail_file and thumbnail_file.filename != '':
+            if not allowed_file(thumbnail_file.filename, 'image'):
+                return jsonify(error_response('Invalid thumbnail file type. Allowed: jpg, jpeg, png, gif, webp')), 400
+            
+            # Validate file size
+            size_valid, size_message = validate_file_size(thumbnail_file, 'image')
+            if not size_valid:
+                return jsonify(error_response(size_message)), 400
+            
+            # Optimize image
+            optimized_file = optimize_image(thumbnail_file)
+            
+            # Create a temporary file-like object for upload
+            class FileWrapper:
+                def __init__(self, file_obj, filename, content_type):
+                    self.file_obj = file_obj
+                    self.filename = filename
+                    self.content_type = content_type
+                
+                def read(self):
+                    return self.file_obj.read()
+                
+                def seek(self, pos):
+                    return self.file_obj.seek(pos)
+            
+            wrapped_file = FileWrapper(optimized_file, thumbnail_file.filename, 'image/jpeg')
+            
+            # Upload to Vercel Blob
+            upload_result = upload_to_vercel_blob(wrapped_file, 'thumbnail')
+            
+            if upload_result['success']:
+                uploaded_files['thumbnail_url'] = upload_result['url']
+                uploaded_files['thumbnail_filename'] = upload_result['filename']
+                uploaded_files['thumbnail_size'] = upload_result['size']
+            else:
+                return jsonify(error_response(f"Thumbnail upload failed: {upload_result['error']}")), 500
+        
+        # Update database with new URLs
+        if uploaded_files:
+            user_id = request.current_user.get('user_id')
+            conn = psycopg2.connect(DATABASE_URL)
+            cursor = conn.cursor()
+            
+            # Get form metadata
+            title = request.form.get('title', 'ConnectedAutoCare Hero Video')
+            description = request.form.get('description', 'Hero protection video')
+            duration = request.form.get('duration', '0:00')
+            
+            # Update video settings
+            updates = [
+                ('landing_page_title', title),
+                ('landing_page_description', description),
+                ('landing_page_duration', duration),
+                ('last_updated', datetime.utcnow().isoformat() + 'Z')
+            ]
+            
+            if 'video_url' in uploaded_files:
+                updates.append(('landing_page_url', uploaded_files['video_url']))
+                updates.append(('video_filename', uploaded_files['video_filename']))
+            
+            if 'thumbnail_url' in uploaded_files:
+                updates.append(('landing_page_thumbnail', uploaded_files['thumbnail_url']))
+                updates.append(('thumbnail_filename', uploaded_files['thumbnail_filename']))
+            
+            for key, value in updates:
+                cursor.execute('''
+                    INSERT INTO admin_settings (category, key, value, updated_by) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (category, key) 
+                    DO UPDATE SET 
+                        value = %s, 
+                        updated_at = CURRENT_TIMESTAMP, 
+                        updated_by = %s;
+                ''', ('video', key, f'"{value}"', user_id, f'"{value}"', user_id))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            for old_file_url in old_files_to_delete:
+                try:
+                    delete_result = delete_from_vercel_blob(old_file_url)
+                    if delete_result['success']:
+                        print(f"Deleted old file: {old_file_url}")
+                    else:
+                        print(f"Failed to delete old file: {old_file_url}")
+                except Exception as e:
+                    print(f"Error deleting old file {old_file_url}: {e}")
+        
+        return jsonify(success_response({
+            'message': 'Upload successful',
+            'uploaded_files': uploaded_files,
+            'video_info': {
+                'video_url': uploaded_files.get('video_url'),
+                'thumbnail_url': uploaded_files.get('thumbnail_url'),
+                'title': request.form.get('title', 'ConnectedAutoCare Hero Video'),
+                'description': request.form.get('description', 'Hero protection video'),
+                'duration': request.form.get('duration', '0:00'),
+                'updated_at': datetime.utcnow().isoformat() + 'Z',
+                'storage_provider': 'Vercel Blob',
+                'file_sizes': {
+                    'video_size_mb': round(uploaded_files.get('video_size', 0) / (1024 * 1024), 2) if 'video_size' in uploaded_files else None,
+                    'thumbnail_size_kb': round(uploaded_files.get('thumbnail_size', 0) / 1024, 2) if 'thumbnail_size' in uploaded_files else None
+                }
+            }
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Upload failed: {str(e)}")), 500
+
+
+@app.route('/api/admin/video/delete', methods=['DELETE'])
+@token_required
+@role_required('admin')
+def delete_video():
+    """Delete current video and thumbnail from Vercel Blob"""
+    try:
+        if not VERCEL_BLOB_READ_WRITE_TOKEN:
+            return jsonify(error_response('Vercel Blob storage not configured')), 500
+        
+        # Get current video URLs
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT key, value 
+            FROM admin_settings 
+            WHERE category = 'video' AND key IN ('landing_page_url', 'landing_page_thumbnail');
+        ''')
+        
+        files_to_delete = []
+        for key, value in cursor.fetchall():
+            if value and value.strip('"') and 'blob.vercel-storage.com' in value:
+                files_to_delete.append(value.strip('"'))
+        
+        # Delete files from Vercel Blob
+        deletion_results = []
+        for file_url in files_to_delete:
+            result = delete_from_vercel_blob(file_url)
+            deletion_results.append({
+                'url': file_url,
+                'success': result['success'],
+                'error': result.get('error')
+            })
+        
+        # Clear database entries
+        user_id = request.current_user.get('user_id')
+        for key in ['landing_page_url', 'landing_page_thumbnail', 'video_filename', 'thumbnail_filename']:
+            cursor.execute('''
+                UPDATE admin_settings 
+                SET value = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE category = 'video' AND key = %s;
+            ''', ('""', user_id, key))
+        
+        # Update last_updated timestamp
+        cursor.execute('''
+            INSERT INTO admin_settings (category, key, value, updated_by) 
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (category, key) 
+            DO UPDATE SET 
+                value = %s, 
+                updated_at = CURRENT_TIMESTAMP, 
+                updated_by = %s;
+        ''', ('video', 'last_updated', f'"{datetime.utcnow().isoformat()}Z"', user_id, f'"{datetime.utcnow().isoformat()}Z"', user_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        successful_deletions = [r for r in deletion_results if r['success']]
+        
+        return jsonify(success_response({
+            'message': f'Deleted {len(successful_deletions)} files successfully',
+            'deletion_results': deletion_results,
+            'cleared_database': True
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Deletion failed: {str(e)}")), 500
+    
+
+@app.route('/api/admin/video/health')
+@token_required
+@role_required('admin')
+def video_service_health():
+    """Check video upload service health"""
+    try:
+        # Test Vercel Blob connection
+        blob_configured = bool(VERCEL_BLOB_READ_WRITE_TOKEN)
+        
+        health_status = {
+            'status': 'healthy' if blob_configured else 'not_configured',
+            'storage_provider': 'Vercel Blob',
+            'blob_configured': blob_configured,
+            'max_video_size_mb': MAX_VIDEO_SIZE / (1024 * 1024),
+            'max_image_size_mb': MAX_IMAGE_SIZE / (1024 * 1024),
+            'allowed_video_formats': list(ALLOWED_VIDEO_EXTENSIONS),
+            'allowed_image_formats': list(ALLOWED_IMAGE_EXTENSIONS),
+            'features': {
+                'image_optimization': True,
+                'automatic_cleanup': False,  # Can be enabled
+                'global_cdn': True,
+                'secure_upload': True
+            }
+        }
+        
+        if not blob_configured:
+            health_status['error'] = 'VERCEL_BLOB_READ_WRITE_TOKEN environment variable not set'
+            return jsonify(health_status), 503
+        
+        return jsonify(success_response(health_status))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Health check failed: {str(e)}")), 500
+
+
+@app.route('/api/landing/video')
+def get_current_landing_video():
+    """Get current landing page video for public display"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT key, value 
+            FROM admin_settings 
+            WHERE category = 'video';
+        ''')
+
+        video_settings = {}
+        for key, value in cursor.fetchall():
+            video_settings[key] = value.strip('"') if isinstance(value, str) else value
+
+        cursor.close()
+        conn.close()
+
+        video_info = {
+            'video_url': video_settings.get('landing_page_url', ''),
+            'thumbnail_url': video_settings.get('landing_page_thumbnail', ''),
+            'title': video_settings.get('landing_page_title', 'ConnectedAutoCare Hero Protection'),
+            'description': video_settings.get('landing_page_description', 'Comprehensive protection plans'),
+            'duration': video_settings.get('landing_page_duration', '2:30'),
+            'updated_at': video_settings.get('last_updated', datetime.utcnow().isoformat() + 'Z')
+        }
+
+        return jsonify(success_response(video_info))
+
+    except Exception as e:
+        return jsonify(success_response({
+            'video_url': '',
+            'thumbnail_url': '',
+            'title': 'ConnectedAutoCare Hero Protection',
+            'description': 'Comprehensive protection plans',
+            'duration': '2:30',
+            'updated_at': datetime.utcnow().isoformat() + 'Z'
+        }))
 
 
 # For local development only
