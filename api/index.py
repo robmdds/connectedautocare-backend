@@ -16,12 +16,14 @@ from werkzeug.utils import secure_filename
 from PIL import Image
 import io
 import requests
+import json
 
 # Database configuration
 DATABASE_URL = os.environ.get(
     'DATABASE_URL', 'postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require')
 
-VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN', "vercel_blob_rw_NyJGOwmGasD868JR_SRRTKZEvjyrFPjJKXt8v4HwARx9Qmy")
+VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get(
+    'BLOB_READ_WRITE_TOKEN', "vercel_blob_rw_NyJGOwmGasD868JR_SRRTKZEvjyrFPjJKXt8v4HwARx9Qmy")
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,83 +40,100 @@ def allowed_file(filename, file_type='video'):
     """Check if file type is allowed"""
     if not filename or '.' not in filename:
         return False
-    
+
     extension = filename.rsplit('.', 1)[1].lower()
-    
+
     if file_type == 'video':
         return extension in ALLOWED_VIDEO_EXTENSIONS
     elif file_type == 'image':
         return extension in ALLOWED_IMAGE_EXTENSIONS
     return False
 
+
 def validate_file_size(file, file_type):
     """Validate file size"""
     file.seek(0, os.SEEK_END)
     file_size = file.tell()
     file.seek(0)
-    
+
     max_size = MAX_VIDEO_SIZE if file_type == 'video' else MAX_IMAGE_SIZE
-    
+
     if file_size > max_size:
         max_mb = max_size / (1024 * 1024)
         return False, f"File too large. Maximum size: {max_mb}MB"
-    
+
     return True, "File size OK"
+
 
 def optimize_image(file):
     """Optimize image for web delivery"""
     try:
         image = Image.open(file)
-        
+
         # Convert to RGB if necessary
         if image.mode in ('RGBA', 'P'):
             image = image.convert('RGB')
-        
+
         # Resize if too large (max 1920x1080 for thumbnails)
         max_width, max_height = 1920, 1080
         if image.width > max_width or image.height > max_height:
             image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
-        
+
         # Save optimized version
         output = io.BytesIO()
         image.save(output, format='JPEG', quality=85, optimize=True)
         output.seek(0)
-        
+
         return output
     except Exception as e:
         print(f"Image optimization failed: {e}")
         file.seek(0)
         return file
 
+
 def upload_to_vercel_blob(file, file_type, filename_prefix="hero"):
     """Upload file to Vercel Blob Storage"""
     try:
         if not VERCEL_BLOB_READ_WRITE_TOKEN:
             return {'success': False, 'error': 'Vercel Blob token not configured'}
-        
+
         # Generate unique filename
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         unique_id = str(uuid.uuid4())[:8]
-        file_extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'bin'
-        
+
+        # Get file extension safely
+        if hasattr(file, 'filename') and file.filename and '.' in file.filename:
+            file_extension = file.filename.rsplit('.', 1)[1].lower()
+        else:
+            file_extension = 'mp4' if file_type == 'video' else 'jpg'
+
         filename = f"{filename_prefix}_{file_type}_{timestamp}_{unique_id}.{file_extension}"
-        
+
         # Vercel Blob API endpoint
         url = f"https://blob.vercel-storage.com/{filename}"
-        
+
+        # Get content type
+        content_type = getattr(file, 'content_type', None)
+        if not content_type:
+            if file_type == 'video':
+                content_type = f'video/{file_extension}'
+            else:
+                content_type = f'image/{file_extension}'
+
         # Prepare headers
         headers = {
             'Authorization': f'Bearer {VERCEL_BLOB_READ_WRITE_TOKEN}',
-            'X-Content-Type': file.content_type or 'application/octet-stream'
+            'X-Content-Type': content_type
         }
-        
+
         # Read file content
         file_content = file.read()
         file.seek(0)  # Reset file pointer
-        
+
         # Upload to Vercel Blob
-        response = requests.put(url, data=file_content, headers=headers)
-        
+        response = requests.put(url, data=file_content,
+                                headers=headers, timeout=60)
+
         if response.status_code in [200, 201]:
             result = response.json()
             return {
@@ -125,32 +144,37 @@ def upload_to_vercel_blob(file, file_type, filename_prefix="hero"):
             }
         else:
             return {
-                'success': False, 
-                'error': f'Upload failed: {response.status_code} - {response.text}'
+                'success': False,
+                'error': f'Upload failed: HTTP {response.status_code} - {response.text}'
             }
-            
+
     except Exception as e:
+        import traceback
+        print(f"Vercel Blob upload error: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         return {'success': False, 'error': f'Upload error: {str(e)}'}
+
 
 def delete_from_vercel_blob(file_url):
     """Delete file from Vercel Blob Storage"""
     try:
         if not VERCEL_BLOB_READ_WRITE_TOKEN:
             return {'success': False, 'error': 'Vercel Blob token not configured'}
-        
+
         headers = {
             'Authorization': f'Bearer {VERCEL_BLOB_READ_WRITE_TOKEN}'
         }
-        
+
         response = requests.delete(file_url, headers=headers)
-        
+
         return {
             'success': response.status_code in [200, 204],
             'status_code': response.status_code
         }
-        
+
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
 
 # Initialize Flask app at module level for Vercel
 app = Flask(__name__)
@@ -720,7 +744,7 @@ def generate_vsc_quote():
 
         # Check if this is a VIN-based quote request
         vin = data.get('vin', '').strip().upper()
-        
+
         # If VIN provided and enhanced service available, try VIN-based approach first
         if vin and enhanced_vin_available:
             try:
@@ -728,7 +752,7 @@ def generate_vsc_quote():
                 vin_result = enhanced_vin_service.decode_vin(vin)
                 if vin_result.get('success'):
                     vehicle_info = vin_result['vehicle_info']
-                    
+
                     # Use VIN data to fill missing fields
                     if not data.get('make'):
                         data['make'] = vehicle_info.get('make', '')
@@ -736,7 +760,7 @@ def generate_vsc_quote():
                         data['model'] = vehicle_info.get('model', '')
                     if not data.get('year'):
                         data['year'] = vehicle_info.get('year', 0)
-                    
+
                     # Mark as auto-populated
                     data['auto_populated'] = True
                     data['vin_decoded'] = vehicle_info
@@ -745,7 +769,8 @@ def generate_vsc_quote():
 
         # Validate required fields
         required_fields = ['make', 'year', 'mileage']
-        missing_fields = [field for field in required_fields if field not in data]
+        missing_fields = [
+            field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
@@ -762,7 +787,8 @@ def generate_vsc_quote():
         }
 
         response = vsc_service.generate_quote(**quote_data)
-        response_data = response if isinstance(response, dict) else response[0] if isinstance(response, list) else response
+        response_data = response if isinstance(
+            response, dict) else response[0] if isinstance(response, list) else response
 
         if response_data.get('success'):
             # Enhance response with VIN information if available
@@ -773,7 +799,7 @@ def generate_vsc_quote():
                     'auto_populated': data.get('auto_populated', False),
                     'vin_decoded': data.get('vin_decoded', {})
                 }
-            
+
             return jsonify(success_response(enhanced_response))
         else:
             return jsonify({"error": response_data.get('error', 'VSC quote generation failed')}), 400
@@ -808,30 +834,35 @@ def check_vsc_eligibility():
 
         if enhanced_vin_available:
             if vin:
-                result = enhanced_vin_service.check_vsc_eligibility(vin=vin, mileage=mileage)
+                result = enhanced_vin_service.check_vsc_eligibility(
+                    vin=vin, mileage=mileage)
             else:
-                result = enhanced_vin_service.check_vsc_eligibility(make=make, year=year, mileage=mileage)
+                result = enhanced_vin_service.check_vsc_eligibility(
+                    make=make, year=year, mileage=mileage)
         else:
             # Basic eligibility check fallback
             current_year = datetime.now().year
             vehicle_age = current_year - year if year else 0
-            
+
             eligible = True
             warnings = []
             restrictions = []
-            
+
             if vehicle_age > 15:
                 eligible = False
-                restrictions.append(f"Vehicle is {vehicle_age} years old (maximum 15 years)")
+                restrictions.append(
+                    f"Vehicle is {vehicle_age} years old (maximum 15 years)")
             elif vehicle_age > 10:
-                warnings.append(f"Vehicle is {vehicle_age} years old - limited options")
-                
+                warnings.append(
+                    f"Vehicle is {vehicle_age} years old - limited options")
+
             if mileage and mileage > 150000:
                 eligible = False
-                restrictions.append(f"Vehicle has {mileage:,} miles (maximum 150,000)")
+                restrictions.append(
+                    f"Vehicle has {mileage:,} miles (maximum 150,000)")
             elif mileage and mileage > 125000:
                 warnings.append(f"High mileage vehicle - premium rates apply")
-            
+
             result = {
                 'success': True,
                 'eligible': eligible,
@@ -879,18 +910,19 @@ def generate_vsc_quote_from_vin():
 
         # Decode VIN and check eligibility
         if enhanced_vin_available:
-            vin_result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
-            
+            vin_result = enhanced_vin_service.get_vin_info_with_eligibility(
+                vin, mileage)
+
             if not vin_result.get('success'):
                 return jsonify(error_response(vin_result.get('error', 'VIN decode failed'))), 400
-            
+
             vehicle_info = vin_result['vehicle_info']
             eligibility = vin_result['eligibility']
-            
+
             if not eligibility.get('eligible'):
                 restrictions = eligibility.get('restrictions', [])
                 return jsonify(error_response(f"Vehicle not eligible: {'; '.join(restrictions)}")), 400
-            
+
             make = vehicle_info.get('make', '')
             model = vehicle_info.get('model', '')
             year = vehicle_info.get('year', 0)
@@ -899,12 +931,12 @@ def generate_vsc_quote_from_vin():
             decode_result = vin_service.decode_vin(vin)
             if not decode_result.get('success'):
                 return jsonify(error_response("Failed to decode VIN")), 400
-            
+
             vehicle_info = decode_result.get('vehicle_info', {})
             make = vehicle_info.get('make', '')
             model = vehicle_info.get('model', '')
             year = vehicle_info.get('year', 0)
-            
+
             # Basic eligibility check
             current_year = datetime.now().year
             vehicle_age = current_year - year if year else 0
@@ -927,10 +959,10 @@ def generate_vsc_quote_from_vin():
                 'auto_populated': True,
                 'decode_method': vehicle_info.get('decode_method', 'enhanced')
             }
-            
+
             if enhanced_vin_available and 'eligibility' in vin_result:
                 quote_data['eligibility_details'] = eligibility
-                
+
             return jsonify(success_response(quote_data))
         else:
             return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
@@ -957,7 +989,7 @@ def vin_health():
         },
         "timestamp": datetime.utcnow().isoformat() + "Z"
     })
-    
+
 
 @app.route('/api/vin/validate', methods=['POST'])
 def validate_vin():
@@ -1009,7 +1041,8 @@ def decode_vin():
 
         # Use enhanced service if available
         if enhanced_vin_available and include_eligibility:
-            result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
+            result = enhanced_vin_service.get_vin_info_with_eligibility(
+                vin, mileage)
         elif enhanced_vin_available:
             result = enhanced_vin_service.decode_vin(vin)
         else:
@@ -1064,7 +1097,8 @@ def enhanced_decode_vin():
         mileage = data.get('mileage', 0)
 
         if enhanced_vin_available:
-            result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
+            result = enhanced_vin_service.get_vin_info_with_eligibility(
+                vin, mileage)
         else:
             # Fallback to basic decoding
             result = vin_service.decode_vin(vin)
@@ -1860,7 +1894,7 @@ def get_all_admin_products():
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
+
         # Get products with their complete pricing data
         cursor.execute('''
             SELECT 
@@ -1907,9 +1941,9 @@ def get_all_admin_products():
             GROUP BY p.id, p.product_code, p.product_name, p.base_price, p.active, p.created_at
             ORDER BY p.created_at DESC;
         ''')
-        
+
         products = cursor.fetchall()
-        
+
         # Convert to proper format for frontend
         processed_products = []
         for product in products:
@@ -1918,14 +1952,16 @@ def get_all_admin_products():
             product_dict['base_price'] = float(product_dict['base_price'])
             product_dict['min_price'] = float(product_dict['min_price'])
             product_dict['max_price'] = float(product_dict['max_price'])
-            
+
             # Convert pricing values to floats
             if product_dict['pricing']:
                 for term, pricing_info in product_dict['pricing'].items():
                     pricing_info['price'] = float(pricing_info['price'])
-                    pricing_info['base_price'] = float(pricing_info['base_price'])
-                    pricing_info['multiplier'] = float(pricing_info['multiplier'])
-            
+                    pricing_info['base_price'] = float(
+                        pricing_info['base_price'])
+                    pricing_info['multiplier'] = float(
+                        pricing_info['multiplier'])
+
             # Add product_type for compatibility
             code_to_type_mapping = {
                 'HOME_PROTECTION_PLAN': 'home_protection',
@@ -1937,17 +1973,17 @@ def get_all_admin_products():
                 'AUTO_RV_DEDUCTIBLE_REIMBURSEMENT': 'auto_rv_deductible_reimbursement',
                 'HERO_LEVEL_HOME_PROTECTION': 'hero_level_protection_home'
             }
-            
+
             product_dict['product_type'] = code_to_type_mapping.get(
-                product_dict['product_code'], 
+                product_dict['product_code'],
                 product_dict['product_code'].lower()
             )
-            
+
             processed_products.append(product_dict)
-        
+
         cursor.close()
         conn.close()
-        
+
         response_data = {
             'success': True,
             'data': {
@@ -1957,9 +1993,9 @@ def get_all_admin_products():
             },
             'timestamp': datetime.utcnow().isoformat() + 'Z'
         }
-        
+
         return jsonify(response_data), 200
-        
+
     except Exception as e:
         return jsonify({
             'success': False,
@@ -2273,23 +2309,36 @@ def get_admin_settings():
             if category not in settings:
                 settings[category] = {}
 
-            # Parse JSON values, handle numeric strings
-            if isinstance(value, str):
+            # Parse JSON values properly
+            if value:
                 try:
-                    # Try to parse as number first
-                    if '.' in value:
-                        settings[category][key] = float(value)
+                    # Try to parse as JSON first
+                    import json
+                    parsed_value = json.loads(value) if isinstance(value, str) else value
+                    settings[category][key] = parsed_value
+                except (json.JSONDecodeError, TypeError):
+                    # If not valid JSON, handle as string/number
+                    if isinstance(value, str):
+                        try:
+                            # Try to parse as number first
+                            if '.' in value:
+                                settings[category][key] = float(value)
+                            else:
+                                settings[category][key] = int(value)
+                        except ValueError:
+                            # If not a number, keep as string (remove quotes if present)
+                            settings[category][key] = value.strip('"')
                     else:
-                        settings[category][key] = int(value)
-                except ValueError:
-                    # If not a number, keep as string (remove quotes if present)
-                    settings[category][key] = value.strip('"')
+                        settings[category][key] = value
             else:
-                settings[category][key] = value
+                settings[category][key] = ''
 
         return jsonify(success_response(settings))
 
     except Exception as e:
+        import traceback
+        print(f"Get settings error: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
         return jsonify(error_response(f"Failed to get settings: {str(e)}")), 500
 
 
@@ -2300,27 +2349,61 @@ def update_admin_settings():
     """Update admin settings in database"""
     try:
         data = request.get_json()
+        
+        # Add validation for the incoming data
+        if not data or not isinstance(data, dict):
+            return jsonify(error_response("Invalid data format")), 400
+            
+        print(f"Received data: {data}")  # Debug logging
+        
+        # Get user ID with proper validation
         user_id = request.current_user.get('user_id')
-
+        
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
+        
+        # Validate user_id exists in database
+        if user_id:
+            cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+            if not cursor.fetchone():
+                user_id = None
+                print(f"Invalid user_id from token, setting to NULL")
+        
+        # If user_id is still invalid, get a valid admin user
+        if not user_id:
+            cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1;")
+            result = cursor.fetchone()
+            if result:
+                user_id = result[0]
+                print(f"Using fallback admin user: {user_id}")
+            else:
+                print("No admin user found, proceeding with NULL")
 
         # Update each setting category
         for category, settings in data.items():
+            print(f"Processing category: {category}, settings: {settings}, type: {type(settings)}")
+            
+            # Validate that settings is a dictionary
+            if not isinstance(settings, dict):
+                print(f"Warning: Expected dict for category '{category}', got {type(settings)}. Skipping.")
+                continue
+                
             for key, value in settings.items():
-                # Convert value to JSON string for storage
-                json_value = str(value) if isinstance(
-                    value, (int, float)) else f'"{value}"'
+                print(f"Processing: {category}.{key} = {value}")
+                
+                # Convert value to proper JSON format
+                import json
+                json_value = json.dumps(value)
 
                 cursor.execute('''
                     INSERT INTO admin_settings (category, key, value, updated_by) 
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (category, key) 
                     DO UPDATE SET 
-                        value = %s, 
+                        value = EXCLUDED.value, 
                         updated_at = CURRENT_TIMESTAMP, 
-                        updated_by = %s;
-                ''', (category, key, json_value, user_id, json_value, user_id))
+                        updated_by = EXCLUDED.updated_by;
+                ''', (category, key, json_value, user_id))
 
         conn.commit()
         cursor.close()
@@ -2328,11 +2411,45 @@ def update_admin_settings():
 
         return jsonify(success_response({
             'message': 'Settings updated successfully',
-            'updated_settings': data
+            'updated_settings': data,
+            'updated_by': user_id
         }))
 
     except Exception as e:
+        import traceback
+        print(f"Settings update error: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
+        if 'conn' in locals():
+            conn.rollback()
+            print("🔄 Changes rolled back")
         return jsonify(error_response(f"Failed to update settings: {str(e)}")), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
+
+# Optional: Add a utility function for user validation that can be reused
+def get_valid_user_id(cursor, token_user_id):
+    """
+    Get a valid user ID, falling back to any admin user if the token user_id is invalid
+    Returns: (user_id, is_fallback)
+    """
+    # First try the user_id from token
+    if token_user_id:
+        cursor.execute("SELECT id FROM users WHERE id = %s;", (token_user_id,))
+        if cursor.fetchone():
+            return token_user_id, False
+    
+    # Fallback to any admin user
+    cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1;")
+    result = cursor.fetchone()
+    if result:
+        return result[0], True
+    
+    # No valid user found
+    return None, True
 
 
 # 6. VIDEO MANAGEMENT ENDPOINTS - DATABASE VERSION
@@ -2345,7 +2462,6 @@ def get_landing_video():
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
 
-        # Get video settings from admin_settings table
         cursor.execute('''
             SELECT key, value 
             FROM admin_settings 
@@ -2354,17 +2470,25 @@ def get_landing_video():
 
         video_settings = {}
         for key, value in cursor.fetchall():
-            # Remove quotes from JSON strings
-            video_settings[key] = value.strip(
-                '"') if isinstance(value, str) else value
+            # Parse JSON values properly
+            if value:
+                try:
+                    # Try to parse as JSON first
+                    parsed_value = json.loads(value) if isinstance(value, str) else value
+                    video_settings[key] = parsed_value
+                except (json.JSONDecodeError, TypeError):
+                    # If not valid JSON, use as string (remove quotes if present)
+                    video_settings[key] = value.strip('"') if isinstance(value, str) else value
+            else:
+                video_settings[key] = ''
 
         cursor.close()
         conn.close()
 
         # Provide defaults if not in database
         video_info = {
-            'video_url': video_settings.get('landing_page_url', 'https://cdn.connectedautocare.com/videos/hero-2025.mp4'),
-            'thumbnail_url': video_settings.get('landing_page_thumbnail', 'https://cdn.connectedautocare.com/thumbnails/hero-2025.jpg'),
+            'video_url': video_settings.get('landing_page_url', ''),
+            'thumbnail_url': video_settings.get('landing_page_thumbnail', ''),
             'title': video_settings.get('landing_page_title', 'ConnectedAutoCare Hero Protection 2025'),
             'description': video_settings.get('landing_page_description', 'Showcase of our comprehensive protection plans'),
             'duration': video_settings.get('landing_page_duration', '2:30'),
@@ -2374,6 +2498,7 @@ def get_landing_video():
         return jsonify(success_response(video_info))
 
     except Exception as e:
+        print(f"Get video error: {str(e)}")
         return jsonify(error_response(f"Failed to get video: {str(e)}")), 500
 
 
@@ -2384,16 +2509,37 @@ def update_landing_video():
     """Update landing page video in database"""
     try:
         data = request.get_json()
+        
+        # Get user ID with fallback to a valid admin user
         user_id = request.current_user.get('user_id')
-
-        required_fields = ['video_url']
-        missing_fields = [
-            field for field in required_fields if field not in data]
-        if missing_fields:
-            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
-
+        
+        # If user_id is invalid, get a valid admin user from database
+        if not user_id:
+            conn_temp = psycopg2.connect(DATABASE_URL)
+            cursor_temp = conn_temp.cursor()
+            cursor_temp.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1;")
+            result = cursor_temp.fetchone()
+            if result:
+                user_id = result[0]
+            cursor_temp.close()
+            conn_temp.close()
+        
+        # Validate user_id exists in database
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+        if not cursor.fetchone():
+            # Get any valid admin user
+            cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1;")
+            result = cursor.fetchone()
+            if result:
+                user_id = result[0]
+                print(f"Using fallback admin user: {user_id}")
+            else:
+                # Set to NULL if no admin user found
+                user_id = None
+                print("No admin user found, setting updated_by to NULL")
 
         # Map form fields to database keys
         field_mapping = {
@@ -2407,28 +2553,30 @@ def update_landing_video():
         # Update each video setting
         for form_field, db_key in field_mapping.items():
             if form_field in data:
-                value = f'"{data[form_field]}"'  # Store as JSON string
+                # Format as JSON
+                json_value = json.dumps(data[form_field])
 
                 cursor.execute('''
                     INSERT INTO admin_settings (category, key, value, updated_by) 
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (category, key) 
                     DO UPDATE SET 
-                        value = %s, 
+                        value = EXCLUDED.value, 
                         updated_at = CURRENT_TIMESTAMP, 
-                        updated_by = %s;
-                ''', ('video', db_key, value, user_id, value, user_id))
+                        updated_by = EXCLUDED.updated_by;
+                ''', ('video', db_key, json_value, user_id))
 
         # Update last_updated timestamp
+        timestamp_value = json.dumps(datetime.utcnow().isoformat() + 'Z')
         cursor.execute('''
             INSERT INTO admin_settings (category, key, value, updated_by) 
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (category, key) 
             DO UPDATE SET 
-                value = %s, 
+                value = EXCLUDED.value, 
                 updated_at = CURRENT_TIMESTAMP, 
-                updated_by = %s;
-        ''', ('video', 'last_updated', f'"{datetime.utcnow().isoformat()}Z"', user_id, f'"{datetime.utcnow().isoformat()}Z"', user_id))
+                updated_by = EXCLUDED.updated_by;
+        ''', ('video', 'last_updated', timestamp_value, user_id))
 
         conn.commit()
         cursor.close()
@@ -2440,6 +2588,9 @@ def update_landing_video():
         }))
 
     except Exception as e:
+        import traceback
+        print(f"Video update error: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
         return jsonify(error_response(f"Failed to update video: {str(e)}")), 500
 
 
@@ -2763,25 +2914,6 @@ def upload_video():
         uploaded_files = {}
         old_files_to_delete = []
         
-        # Get current video URLs for cleanup
-        try:
-            conn = psycopg2.connect(DATABASE_URL)
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT key, value 
-                FROM admin_settings 
-                WHERE category = 'video' AND key IN ('landing_page_url', 'landing_page_thumbnail');
-            ''')
-            
-            for key, value in cursor.fetchall():
-                if value and value.strip('"') and 'blob.vercel-storage.com' in value:
-                    old_files_to_delete.append(value.strip('"'))
-            
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Warning: Could not get old files for cleanup: {e}")
-        
         # Handle video upload
         if video_file and video_file.filename != '':
             if not allowed_file(video_file.filename, 'video'):
@@ -2815,7 +2947,7 @@ def upload_video():
             # Optimize image
             optimized_file = optimize_image(thumbnail_file)
             
-            # Create a temporary file-like object for upload
+            # Create FileWrapper for upload
             class FileWrapper:
                 def __init__(self, file_obj, filename, content_type):
                     self.file_obj = file_obj
@@ -2829,8 +2961,6 @@ def upload_video():
                     return self.file_obj.seek(pos)
             
             wrapped_file = FileWrapper(optimized_file, thumbnail_file.filename, 'image/jpeg')
-            
-            # Upload to Vercel Blob
             upload_result = upload_to_vercel_blob(wrapped_file, 'thumbnail')
             
             if upload_result['success']:
@@ -2842,46 +2972,106 @@ def upload_video():
         
         # Update database with new URLs
         if uploaded_files:
+            # Get user ID with proper validation
             user_id = request.current_user.get('user_id')
+            
             conn = psycopg2.connect(DATABASE_URL)
             cursor = conn.cursor()
             
-            # Get form metadata
-            title = request.form.get('title', 'ConnectedAutoCare Hero Video')
-            description = request.form.get('description', 'Hero protection video')
-            duration = request.form.get('duration', '0:00')
-            
-            # Update video settings
-            updates = [
-                ('landing_page_title', title),
-                ('landing_page_description', description),
-                ('landing_page_duration', duration),
-                ('last_updated', datetime.utcnow().isoformat() + 'Z')
-            ]
-            
-            if 'video_url' in uploaded_files:
-                updates.append(('landing_page_url', uploaded_files['video_url']))
-                updates.append(('video_filename', uploaded_files['video_filename']))
-            
-            if 'thumbnail_url' in uploaded_files:
-                updates.append(('landing_page_thumbnail', uploaded_files['thumbnail_url']))
-                updates.append(('thumbnail_filename', uploaded_files['thumbnail_filename']))
-            
-            for key, value in updates:
+            try:
+                # Validate user_id exists in database
+                if user_id:
+                    cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+                    if not cursor.fetchone():
+                        user_id = None
+                        print(f"Invalid user_id from token, setting to NULL")
+                
+                # If user_id is still invalid, get a valid admin user
+                if not user_id:
+                    cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1;")
+                    result = cursor.fetchone()
+                    if result:
+                        user_id = result[0]
+                        print(f"Using fallback admin user: {user_id}")
+                    else:
+                        print("No admin user found, proceeding with NULL")
+                
+                # Get current video URLs for cleanup (get old files before updating)
                 cursor.execute('''
-                    INSERT INTO admin_settings (category, key, value, updated_by) 
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (category, key) 
-                    DO UPDATE SET 
-                        value = %s, 
-                        updated_at = CURRENT_TIMESTAMP, 
-                        updated_by = %s;
-                ''', ('video', key, f'"{value}"', user_id, f'"{value}"', user_id))
+                    SELECT key, value 
+                    FROM admin_settings 
+                    WHERE category = 'video' AND key IN ('landing_page_url', 'landing_page_thumbnail');
+                ''')
+                
+                for key, value in cursor.fetchall():
+                    if value:
+                        # Parse JSON value
+                        import json
+                        try:
+                            url_value = json.loads(value) if isinstance(value, str) else value
+                            if url_value and 'blob.vercel-storage.com' in str(url_value):
+                                old_files_to_delete.append(str(url_value))
+                        except (json.JSONDecodeError, TypeError):
+                            # Handle non-JSON values
+                            if isinstance(value, str) and 'blob.vercel-storage.com' in value:
+                                old_files_to_delete.append(value.strip('"'))
+                
+                # Get form metadata
+                title = request.form.get('title', 'ConnectedAutoCare Hero Video')
+                description = request.form.get('description', 'Hero protection video')
+                duration = request.form.get('duration', '0:00')
+                
+                # Prepare updates with proper JSON formatting
+                updates = [
+                    ('landing_page_title', title),
+                    ('landing_page_description', description),
+                    ('landing_page_duration', duration),
+                    ('last_updated', datetime.utcnow().isoformat() + 'Z')
+                ]
+                
+                if 'video_url' in uploaded_files:
+                    updates.append(('landing_page_url', uploaded_files['video_url']))
+                    updates.append(('video_filename', uploaded_files['video_filename']))
+                
+                if 'thumbnail_url' in uploaded_files:
+                    updates.append(('landing_page_thumbnail', uploaded_files['thumbnail_url']))
+                    updates.append(('thumbnail_filename', uploaded_files['thumbnail_filename']))
+                
+                # Insert/update each setting
+                for key, value in updates:
+                    # Format value as JSON string
+                    json_value = json.dumps(value)
+                    
+                    # Use UPSERT with proper handling of updated_by
+                    cursor.execute('''
+                        INSERT INTO admin_settings (category, key, value, updated_by) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (category, key) 
+                        DO UPDATE SET 
+                            value = EXCLUDED.value, 
+                            updated_at = CURRENT_TIMESTAMP, 
+                            updated_by = EXCLUDED.updated_by;
+                    ''', ('video', key, json_value, user_id))
+                
+                conn.commit()
+                print(f"✅ Successfully updated database with new video settings")
+                
+            except Exception as db_error:
+                print(f"Database update error: {db_error}")
+                conn.rollback()
+                # If database update fails but files were uploaded, we should clean them up
+                for file_key in ['video_url', 'thumbnail_url']:
+                    if file_key in uploaded_files:
+                        try:
+                            delete_from_vercel_blob(uploaded_files[file_key])
+                        except:
+                            pass
+                raise db_error
+            finally:
+                cursor.close()
+                conn.close()
             
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
+            # Clean up old files after successful database update
             for old_file_url in old_files_to_delete:
                 try:
                     delete_result = delete_from_vercel_blob(old_file_url)
@@ -2911,6 +3101,12 @@ def upload_video():
         })), 201
         
     except Exception as e:
+        # Add more detailed error logging
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Video upload error: {str(e)}")
+        print(f"Full traceback: {error_details}")
+        
         return jsonify(error_response(f"Upload failed: {str(e)}")), 500
 
 
@@ -2922,21 +3118,50 @@ def delete_video():
     try:
         if not VERCEL_BLOB_READ_WRITE_TOKEN:
             return jsonify(error_response('Vercel Blob storage not configured')), 500
-        
+
         # Get current video URLs
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
+        
+        # Get user ID with proper validation
+        user_id = request.current_user.get('user_id')
+        
+        # Validate user_id exists in database
+        if user_id:
+            cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+            if not cursor.fetchone():
+                user_id = None
+                print(f"Invalid user_id from token, setting to NULL")
+        
+        # If user_id is still invalid, get a valid admin user
+        if not user_id:
+            cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1;")
+            result = cursor.fetchone()
+            if result:
+                user_id = result[0]
+                print(f"Using fallback admin user: {user_id}")
+            else:
+                print("No admin user found, proceeding with NULL")
+        
         cursor.execute('''
             SELECT key, value 
             FROM admin_settings 
             WHERE category = 'video' AND key IN ('landing_page_url', 'landing_page_thumbnail');
         ''')
-        
+
         files_to_delete = []
         for key, value in cursor.fetchall():
-            if value and value.strip('"') and 'blob.vercel-storage.com' in value:
-                files_to_delete.append(value.strip('"'))
-        
+            if value:
+                try:
+                    # Parse JSON value
+                    url_value = json.loads(value) if isinstance(value, str) else value
+                    if url_value and 'blob.vercel-storage.com' in str(url_value):
+                        files_to_delete.append(str(url_value))
+                except (json.JSONDecodeError, TypeError):
+                    # Handle non-JSON values
+                    if isinstance(value, str) and 'blob.vercel-storage.com' in value:
+                        files_to_delete.append(value.strip('"'))
+
         # Delete files from Vercel Blob
         deletion_results = []
         for file_url in files_to_delete:
@@ -2946,42 +3171,45 @@ def delete_video():
                 'success': result['success'],
                 'error': result.get('error')
             })
-        
+
         # Clear database entries
-        user_id = request.current_user.get('user_id')
         for key in ['landing_page_url', 'landing_page_thumbnail', 'video_filename', 'thumbnail_filename']:
             cursor.execute('''
                 UPDATE admin_settings 
                 SET value = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
                 WHERE category = 'video' AND key = %s;
             ''', ('""', user_id, key))
-        
+
         # Update last_updated timestamp
+        timestamp_json = json.dumps(datetime.utcnow().isoformat() + 'Z')
         cursor.execute('''
             INSERT INTO admin_settings (category, key, value, updated_by) 
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (category, key) 
             DO UPDATE SET 
-                value = %s, 
+                value = EXCLUDED.value, 
                 updated_at = CURRENT_TIMESTAMP, 
-                updated_by = %s;
-        ''', ('video', 'last_updated', f'"{datetime.utcnow().isoformat()}Z"', user_id, f'"{datetime.utcnow().isoformat()}Z"', user_id))
-        
+                updated_by = EXCLUDED.updated_by;
+        ''', ('video', 'last_updated', timestamp_json, user_id))
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
         successful_deletions = [r for r in deletion_results if r['success']]
-        
+
         return jsonify(success_response({
             'message': f'Deleted {len(successful_deletions)} files successfully',
             'deletion_results': deletion_results,
             'cleared_database': True
         }))
-        
+
     except Exception as e:
+        import traceback
+        print(f"Video deletion error: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
         return jsonify(error_response(f"Deletion failed: {str(e)}")), 500
-    
+
 
 @app.route('/api/admin/video/health')
 @token_required
@@ -2991,7 +3219,7 @@ def video_service_health():
     try:
         # Test Vercel Blob connection
         blob_configured = bool(VERCEL_BLOB_READ_WRITE_TOKEN)
-        
+
         health_status = {
             'status': 'healthy' if blob_configured else 'not_configured',
             'storage_provider': 'Vercel Blob',
@@ -3007,13 +3235,13 @@ def video_service_health():
                 'secure_upload': True
             }
         }
-        
+
         if not blob_configured:
             health_status['error'] = 'VERCEL_BLOB_READ_WRITE_TOKEN environment variable not set'
             return jsonify(health_status), 503
-        
+
         return jsonify(success_response(health_status))
-        
+
     except Exception as e:
         return jsonify(error_response(f"Health check failed: {str(e)}")), 500
 
@@ -3033,7 +3261,8 @@ def get_current_landing_video():
 
         video_settings = {}
         for key, value in cursor.fetchall():
-            video_settings[key] = value.strip('"') if isinstance(value, str) else value
+            video_settings[key] = value.strip(
+                '"') if isinstance(value, str) else value
 
         cursor.close()
         conn.close()
