@@ -2899,6 +2899,8 @@ def internal_error(error):
 @role_required('admin')
 def upload_video():
     """Upload video file and thumbnail to Vercel Blob Storage"""
+    import json  # Move import to the top of the function
+    
     try:
         # Check Vercel Blob configuration
         if not VERCEL_BLOB_READ_WRITE_TOKEN:
@@ -3005,8 +3007,7 @@ def upload_video():
                 
                 for key, value in cursor.fetchall():
                     if value:
-                        # Parse JSON value
-                        import json
+                        # Parse JSON value - json is now available in function scope
                         try:
                             url_value = json.loads(value) if isinstance(value, str) else value
                             if url_value and 'blob.vercel-storage.com' in str(url_value):
@@ -3039,7 +3040,7 @@ def upload_video():
                 
                 # Insert/update each setting
                 for key, value in updates:
-                    # Format value as JSON string
+                    # Format value as JSON string - json is now available
                     json_value = json.dumps(value)
                     
                     # Use UPSERT with proper handling of updated_by
