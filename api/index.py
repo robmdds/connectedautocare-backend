@@ -4286,8 +4286,12 @@ def update_vsc_rate(rate_id):
         
         for field in allowed_fields:
             if field in data:
+                value = data[field]
+                # Replace null with 0 for mileage fields
+                if value is None and field in ['min_mileage', 'max_mileage']:
+                    value = 0
                 update_fields.append(f"{field} = %s")
-                params.append(data[field])
+                params.append(value)
         
         if not update_fields:
             cursor.close()
@@ -4444,9 +4448,9 @@ def get_admin_vehicle_classes():
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         cursor.execute('''
-            SELECT id, make_name, vehicle_class, active, created_at, updated_at
+            SELECT id, make, vehicle_class, active, created_at, updated_at
             FROM vsc_vehicle_classes 
-            ORDER BY vehicle_class, make_name;
+            ORDER BY vehicle_class, make;
         ''')
         
         classifications = cursor.fetchall()
@@ -4479,7 +4483,7 @@ def create_vehicle_classification():
     try:
         data = request.get_json()
         
-        required_fields = ['make_name', 'vehicle_class']
+        required_fields = ['make', 'vehicle_class']
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
@@ -4492,8 +4496,8 @@ def create_vehicle_classification():
         
         # Check for duplicate
         cursor.execute('''
-            SELECT id FROM vsc_vehicle_classes WHERE make_name = %s;
-        ''', (data['make_name'],))
+            SELECT id FROM vsc_vehicle_classes WHERE make = %s;
+        ''', (data['make'],))
         
         if cursor.fetchone():
             cursor.close()
@@ -4502,10 +4506,10 @@ def create_vehicle_classification():
         
         # Insert new classification
         cursor.execute('''
-            INSERT INTO vsc_vehicle_classes (make_name, vehicle_class, active)
+            INSERT INTO vsc_vehicle_classes (make, vehicle_class, active)
             VALUES (%s, %s, %s)
             RETURNING id, created_at;
-        ''', (data['make_name'], data['vehicle_class'], data.get('active', True)))
+        ''', (data['make'], data['vehicle_class'], data.get('active', True)))
         
         class_id, created_at = cursor.fetchone()
         conn.commit()
@@ -4547,7 +4551,7 @@ def update_vehicle_classification(class_id):
         update_fields = []
         params = []
         
-        allowed_fields = ['make_name', 'vehicle_class', 'active']
+        allowed_fields = ['make', 'vehicle_class', 'active']
         
         for field in allowed_fields:
             if field in data:
@@ -5408,6 +5412,1828 @@ def get_vsc_cache_status():
         
     except Exception as e:
         return jsonify(error_response(f"Failed to get cache status: {str(e)}")), 500
+    
+# ================================
+# ENHANCED PRODUCT MANAGEMENT ENDPOINTS
+# ================================
+
+@app.route('/api/admin/products/<product_code>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_product_by_code(product_code):
+    """Update existing product by product code"""
+    try:
+        data = request.get_json()
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if product exists
+        cursor.execute('SELECT id FROM products WHERE product_code = %s;', (product_code,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product not found')), 404
+        
+        # Build dynamic UPDATE query
+        update_fields = []
+        params = []
+        # Only include fields that actually exist in the products table
+        allowed_fields = ['product_name', 'base_price', 'active']
+        
+        for field in allowed_fields:
+            if field in data:
+                update_fields.append(f"{field} = %s")
+                params.append(data[field])
+        
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+        
+        # Add product_code for WHERE clause
+        params.append(product_code)
+        
+        query = f"UPDATE products SET {', '.join(update_fields)} WHERE product_code = %s;"
+        cursor.execute(query, params)
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Product {product_code} updated successfully',
+            'product': {
+                'product_code': product_code,
+                **data
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update product: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/<product_code>', methods=['DELETE'])
+@token_required
+@role_required('admin')
+def delete_product_by_code(product_code):
+    """Delete product and its pricing by product code"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if product exists
+        cursor.execute('SELECT product_name FROM products WHERE product_code = %s;', (product_code,))
+        product = cursor.fetchone()
+        if not product:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product not found')), 404
+        
+        product_name = product[0]
+        
+        # Delete pricing first (foreign key constraint)
+        cursor.execute('DELETE FROM pricing WHERE product_code = %s;', (product_code,))
+        
+        # Delete product
+        cursor.execute('DELETE FROM products WHERE product_code = %s;', (product_code,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Product "{product_name}" and its pricing deleted successfully'
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to delete product: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/<product_code>/pricing', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_product_pricing_details(product_code):
+    """Get detailed pricing information for a specific product"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get product info
+        cursor.execute('''
+            SELECT product_code, product_name, base_price 
+            FROM products 
+            WHERE product_code = %s;
+        ''', (product_code,))
+        
+        product = cursor.fetchone()
+        if not product:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product not found')), 404
+        
+        # Get all pricing for this product
+        cursor.execute('''
+            SELECT term_years, customer_type, multiplier,
+                   ROUND(p.base_price * pr.multiplier, 2) as calculated_price
+            FROM pricing pr
+            JOIN products p ON p.product_code = pr.product_code
+            WHERE pr.product_code = %s
+            ORDER BY term_years, customer_type;
+        ''', (product_code,))
+        
+        pricing_rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Organize pricing by term and customer type
+        pricing_structure = {}
+        for row in pricing_rows:
+            term = row['term_years']
+            customer_type = row['customer_type']
+            
+            if term not in pricing_structure:
+                pricing_structure[term] = {}
+            
+            pricing_structure[term][customer_type] = {
+                'multiplier': float(row['multiplier']),
+                'calculated_price': float(row['calculated_price'])
+            }
+        
+        return jsonify(success_response({
+            'product_code': product['product_code'],
+            'product_name': product['product_name'],
+            'base_price': float(product['base_price']),
+            'pricing_structure': pricing_structure,
+            'available_terms': sorted(list(set(row['term_years'] for row in pricing_rows))),
+            'customer_types': sorted(list(set(row['customer_type'] for row in pricing_rows)))
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get product pricing: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/<product_code>/pricing/bulk', methods=['PUT'])
+@token_required
+@role_required('admin')
+def bulk_update_product_pricing(product_code):
+    """Bulk update all pricing for a specific product"""
+    try:
+        data = request.get_json()
+        
+        if 'base_price' not in data or 'pricing' not in data:
+            return jsonify(error_response('base_price and pricing are required')), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if product exists and update base price
+        cursor.execute('''
+            UPDATE products 
+            SET base_price = %s, updated_at = CURRENT_TIMESTAMP 
+            WHERE product_code = %s
+            RETURNING id;
+        ''', (data['base_price'], product_code))
+        
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product not found')), 404
+        
+        # Delete existing pricing for this product
+        cursor.execute('DELETE FROM pricing WHERE product_code = %s;', (product_code,))
+        
+        # Insert new pricing
+        pricing_data = []
+        for term_str, customer_types in data['pricing'].items():
+            term = int(term_str)
+            for customer_type, multiplier in customer_types.items():
+                pricing_data.append((product_code, term, float(multiplier), customer_type))
+        
+        if pricing_data:
+            from psycopg2.extras import execute_values
+            execute_values(cursor, '''
+                INSERT INTO pricing (product_code, term_years, multiplier, customer_type)
+                VALUES %s;
+            ''', pricing_data)
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Pricing updated for {product_code}',
+            'updated_base_price': data['base_price'],
+            'updated_pricing_records': len(pricing_data)
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to bulk update pricing: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/search', methods=['GET'])
+@token_required
+@role_required('admin')
+def search_products():
+    """Search products by name, code, or category"""
+    try:
+        search_term = request.args.get('q', '').strip()
+        category = request.args.get('category', '')
+        active_only = request.args.get('active_only', 'false').lower() == 'true'
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        
+        if search_term:
+            where_conditions.append('''
+                (LOWER(product_name) LIKE %s OR 
+                 LOWER(product_code) LIKE %s OR 
+                 LOWER(description) LIKE %s)
+            ''')
+            search_pattern = f'%{search_term.lower()}%'
+            params.extend([search_pattern, search_pattern, search_pattern])
+        
+        if category:
+            # Map category to product code patterns
+            category_patterns = {
+                'home_protection': '%HOME%',
+                'auto_protection': '%AUTO%',
+                'deductible_reimbursement': '%DEDUCTIBLE%'
+            }
+            if category in category_patterns:
+                where_conditions.append('product_code LIKE %s')
+                params.append(category_patterns[category])
+        
+        if active_only:
+            where_conditions.append('active = true')
+        
+        where_clause = ' AND '.join(where_conditions) if where_conditions else 'TRUE'
+        
+        cursor.execute(f'''
+            SELECT 
+                p.id,
+                p.product_code,
+                p.product_name,
+                p.description,
+                p.base_price,
+                p.active,
+                p.created_at,
+                COUNT(pr.id) as pricing_count,
+                COALESCE(
+                    MIN(ROUND(p.base_price * pr.multiplier, 2)) 
+                    FILTER (WHERE pr.customer_type = 'retail'),
+                    p.base_price
+                ) as min_price,
+                COALESCE(
+                    MAX(ROUND(p.base_price * pr.multiplier, 2)) 
+                    FILTER (WHERE pr.customer_type = 'retail'),
+                    p.base_price
+                ) as max_price,
+                COALESCE(
+                    ARRAY_AGG(DISTINCT pr.term_years ORDER BY pr.term_years) 
+                    FILTER (WHERE pr.customer_type = 'retail'),
+                    ARRAY[]::integer[]
+                ) as terms_available
+            FROM products p
+            LEFT JOIN pricing pr ON p.product_code = pr.product_code
+            WHERE {where_clause}
+            GROUP BY p.id, p.product_code, p.product_name, p.description, p.base_price, p.active, p.created_at
+            ORDER BY p.product_name;
+        ''', params)
+        
+        products = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Convert to proper format
+        products_list = []
+        for product in products:
+            product_dict = dict(product)
+            product_dict['base_price'] = float(product_dict['base_price'])
+            product_dict['min_price'] = float(product_dict['min_price'])
+            product_dict['max_price'] = float(product_dict['max_price'])
+            product_dict['created_at'] = product_dict['created_at'].isoformat() if product_dict['created_at'] else None
+            products_list.append(product_dict)
+        
+        return jsonify(success_response({
+            'products': products_list,
+            'total': len(products_list),
+            'search_criteria': {
+                'search_term': search_term,
+                'category': category,
+                'active_only': active_only
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Search failed: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/categories', methods=['GET'])
+def get_product_categories():
+    """Get available product categories"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT 
+                CASE 
+                    WHEN product_code LIKE '%HOME%' THEN 'home_protection'
+                    WHEN product_code LIKE '%AUTO%' AND product_code NOT LIKE '%DEDUCTIBLE%' THEN 'auto_protection'
+                    WHEN product_code LIKE '%DEDUCTIBLE%' THEN 'deductible_reimbursement'
+                    ELSE 'other'
+                END as category,
+                COUNT(*) as product_count
+            FROM products 
+            WHERE active = true
+            GROUP BY category
+            ORDER BY category;
+        ''')
+        
+        categories = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        category_data = {
+            'categories': [
+                {
+                    'code': cat[0],
+                    'name': cat[0].replace('_', ' ').title(),
+                    'product_count': cat[1]
+                }
+                for cat in categories
+            ],
+            'total_categories': len(categories)
+        }
+        
+        return jsonify(success_response(category_data))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get categories: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/stats', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_product_stats():
+    """Get product management statistics"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Get overall stats
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total_products,
+                COUNT(*) FILTER (WHERE active = true) as active_products,
+                COUNT(*) FILTER (WHERE active = false) as inactive_products,
+                AVG(base_price) as avg_base_price,
+                MIN(base_price) as min_base_price,
+                MAX(base_price) as max_base_price
+            FROM products;
+        ''')
+        
+        overall_stats = cursor.fetchone()
+        
+        # Get pricing stats
+        cursor.execute('''
+            SELECT 
+                COUNT(DISTINCT product_code) as products_with_pricing,
+                COUNT(*) as total_pricing_records,
+                COUNT(DISTINCT term_years) as unique_terms,
+                COUNT(DISTINCT customer_type) as customer_types
+            FROM pricing;
+        ''')
+        
+        pricing_stats = cursor.fetchone()
+        
+        # Get recent activity
+        cursor.execute('''
+            SELECT 
+                product_code,
+                product_name,
+                updated_at
+            FROM products 
+            WHERE updated_at IS NOT NULL
+            ORDER BY updated_at DESC
+            LIMIT 5;
+        ''')
+        
+        recent_updates = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        stats = {
+            'overview': {
+                'total_products': overall_stats[0] or 0,
+                'active_products': overall_stats[1] or 0,
+                'inactive_products': overall_stats[2] or 0,
+                'avg_base_price': round(float(overall_stats[3]), 2) if overall_stats[3] else 0,
+                'price_range': {
+                    'min': float(overall_stats[4]) if overall_stats[4] else 0,
+                    'max': float(overall_stats[5]) if overall_stats[5] else 0
+                }
+            },
+            'pricing': {
+                'products_with_pricing': pricing_stats[0] or 0,
+                'total_pricing_records': pricing_stats[1] or 0,
+                'unique_terms': pricing_stats[2] or 0,
+                'customer_types': pricing_stats[3] or 0
+            },
+            'recent_activity': [
+                {
+                    'product_code': update[0],
+                    'product_name': update[1],
+                    'updated_at': update[2].isoformat() if update[2] else None
+                }
+                for update in recent_updates
+            ]
+        }
+        
+        return jsonify(success_response(stats))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get stats: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/export', methods=['GET'])
+@token_required
+@role_required('admin')
+def export_products():
+    """Export products and pricing data"""
+    try:
+        export_format = request.args.get('format', 'csv')
+        include_pricing = request.args.get('include_pricing', 'true').lower() == 'true'
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        if include_pricing:
+            cursor.execute('''
+                SELECT 
+                    p.product_code,
+                    p.product_name,
+                    p.description,
+                    p.base_price,
+                    p.active,
+                    pr.term_years,
+                    pr.customer_type,
+                    pr.multiplier,
+                    ROUND(p.base_price * pr.multiplier, 2) as calculated_price,
+                    p.created_at
+                FROM products p
+                LEFT JOIN pricing pr ON p.product_code = pr.product_code
+                ORDER BY p.product_code, pr.term_years, pr.customer_type;
+            ''')
+        else:
+            cursor.execute('''
+                SELECT 
+                    product_code,
+                    product_name,
+                    description,
+                    base_price,
+                    active,
+                    created_at
+                FROM products
+                ORDER BY product_code;
+            ''')
+        
+        data = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        if export_format == 'csv':
+            import csv
+            from io import StringIO
+            
+            output = StringIO()
+            writer = csv.writer(output)
+            
+            # Write header
+            if include_pricing:
+                writer.writerow([
+                    'Product Code', 'Product Name', 'Description', 'Base Price', 'Active',
+                    'Term Years', 'Customer Type', 'Multiplier', 'Calculated Price', 'Created At'
+                ])
+            else:
+                writer.writerow([
+                    'Product Code', 'Product Name', 'Description', 'Base Price', 'Active', 'Created At'
+                ])
+            
+            # Write data
+            for row in data:
+                if include_pricing:
+                    writer.writerow([
+                        row[0], row[1], row[2], float(row[3]), row[4],
+                        row[5] if row[5] else '', row[6] if row[6] else '',
+                        float(row[7]) if row[7] else '', float(row[8]) if row[8] else '',
+                        row[9].isoformat() if row[9] else ''
+                    ])
+                else:
+                    writer.writerow([
+                        row[0], row[1], row[2], float(row[3]), row[4],
+                        row[5].isoformat() if row[5] else ''
+                    ])
+            
+            csv_content = output.getvalue()
+            output.close()
+            
+            response = make_response(csv_content)
+            response.headers['Content-Type'] = 'text/csv'
+            response.headers['Content-Disposition'] = f'attachment; filename=products_export_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
+            return response
+            
+        else:  # JSON format
+            export_data = []
+            if include_pricing:
+                # Group by product for better JSON structure
+                products = {}
+                for row in data:
+                    product_code = row[0]
+                    if product_code not in products:
+                        products[product_code] = {
+                            'product_code': row[0],
+                            'product_name': row[1],
+                            'description': row[2],
+                            'base_price': float(row[3]),
+                            'active': row[4],
+                            'created_at': row[9].isoformat() if row[9] else None,
+                            'pricing': []
+                        }
+                    
+                    if row[5]:  # Has pricing data
+                        products[product_code]['pricing'].append({
+                            'term_years': row[5],
+                            'customer_type': row[6],
+                            'multiplier': float(row[7]),
+                            'calculated_price': float(row[8])
+                        })
+                
+                export_data = list(products.values())
+            else:
+                export_data = [
+                    {
+                        'product_code': row[0],
+                        'product_name': row[1],
+                        'description': row[2],
+                        'base_price': float(row[3]),
+                        'active': row[4],
+                        'created_at': row[5].isoformat() if row[5] else None
+                    }
+                    for row in data
+                ]
+            
+            return jsonify(success_response({
+                'products': export_data,
+                'export_info': {
+                    'total_records': len(export_data),
+                    'include_pricing': include_pricing,
+                    'exported_at': datetime.utcnow().isoformat() + 'Z'
+                }
+            }))
+            
+    except Exception as e:
+        return jsonify(error_response(f"Export failed: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/import', methods=['POST'])
+@token_required
+@role_required('admin')
+def import_products():
+    """Import products from CSV file"""
+    try:
+        if 'file' not in request.files:
+            return jsonify(error_response('No file uploaded')), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify(error_response('No file selected')), 400
+        
+        if not file.filename.lower().endswith('.csv'):
+            return jsonify(error_response('File must be CSV format')), 400
+        
+        import csv
+        from io import StringIO
+        
+        # Read and parse CSV
+        csv_content = file.read().decode('utf-8')
+        csv_reader = csv.DictReader(StringIO(csv_content))
+        
+        products_data = []
+        pricing_data = []
+        errors = []
+        
+        required_product_columns = ['product_code', 'product_name', 'base_price']
+        
+        for row_num, row in enumerate(csv_reader, start=2):
+            # Validate required columns
+            missing_cols = [col for col in required_product_columns if not row.get(col)]
+            if missing_cols:
+                errors.append(f"Row {row_num}: Missing columns: {', '.join(missing_cols)}")
+                continue
+            
+            try:
+                # Process product data
+                product_data = {
+                    'product_code': row['product_code'].strip().upper(),
+                    'product_name': row['product_name'].strip(),
+                    'description': row.get('description', '').strip(),
+                    'base_price': float(row['base_price']),
+                    'active': row.get('active', 'true').lower() in ['true', '1', 'yes']
+                }
+                
+                # Check if this product is already in our list
+                existing_product = next((p for p in products_data if p['product_code'] == product_data['product_code']), None)
+                if not existing_product:
+                    products_data.append(product_data)
+                
+                # Process pricing data if available
+                if row.get('term_years') and row.get('customer_type') and row.get('multiplier'):
+                    pricing_item = {
+                        'product_code': product_data['product_code'],
+                        'term_years': int(row['term_years']),
+                        'customer_type': row['customer_type'].strip().lower(),
+                        'multiplier': float(row['multiplier'])
+                    }
+                    pricing_data.append(pricing_item)
+                
+            except (ValueError, TypeError) as e:
+                errors.append(f"Row {row_num}: Data validation error - {str(e)}")
+                continue
+        
+        if errors:
+            return jsonify(error_response({
+                'message': 'CSV validation failed',
+                'errors': errors[:10],  # Limit to first 10 errors
+                'total_errors': len(errors)
+            })), 400
+        
+        if not products_data:
+            return jsonify(error_response('No valid product data found in CSV')), 400
+        
+        # Import data to database
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        try:
+            # Import products
+            product_count = 0
+            for product in products_data:
+                cursor.execute('''
+                    INSERT INTO products (product_code, product_name, description, base_price, active)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (product_code) 
+                    DO UPDATE SET 
+                        product_name = EXCLUDED.product_name,
+                        description = EXCLUDED.description,
+                        base_price = EXCLUDED.base_price,
+                        active = EXCLUDED.active,
+                        updated_at = CURRENT_TIMESTAMP;
+                ''', (
+                    product['product_code'], product['product_name'],
+                    product['description'], product['base_price'], product['active']
+                ))
+                product_count += 1
+            
+            # Import pricing if available
+            pricing_count = 0
+            if pricing_data:
+                for pricing in pricing_data:
+                    cursor.execute('''
+                        INSERT INTO pricing (product_code, term_years, customer_type, multiplier)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (product_code, term_years, customer_type)
+                        DO UPDATE SET 
+                            multiplier = EXCLUDED.multiplier,
+                            updated_at = CURRENT_TIMESTAMP;
+                    ''', (
+                        pricing['product_code'], pricing['term_years'],
+                        pricing['customer_type'], pricing['multiplier']
+                    ))
+                    pricing_count += 1
+            
+            conn.commit()
+            
+            return jsonify(success_response({
+                'message': 'CSV import completed successfully',
+                'import_summary': {
+                    'products_imported': product_count,
+                    'pricing_records_imported': pricing_count,
+                    'total_rows_processed': len(products_data),
+                    'validation_errors': len(errors)
+                }
+            })), 201
+            
+        except Exception as db_error:
+            conn.rollback()
+            raise db_error
+        finally:
+            cursor.close()
+            conn.close()
+            
+    except Exception as e:
+        return jsonify(error_response(f"CSV import failed: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/validate', methods=['POST'])
+@token_required
+@role_required('admin')
+def validate_product_data():
+    """Validate product data before saving"""
+    try:
+        data = request.get_json()
+        
+        errors = []
+        warnings = []
+        
+        # Validate product code
+        if not data.get('product_code'):
+            errors.append('Product code is required')
+        elif len(data['product_code']) < 3:
+            errors.append('Product code must be at least 3 characters')
+        else:
+            # Check if product code already exists (for new products)
+            if not data.get('is_edit', False):
+                conn = psycopg2.connect(DATABASE_URL)
+                cursor = conn.cursor()
+                cursor.execute('SELECT product_code FROM products WHERE product_code = %s;', (data['product_code'],))
+                if cursor.fetchone():
+                    errors.append('Product code already exists')
+                cursor.close()
+                conn.close()
+        
+        # Validate product name
+        if not data.get('product_name'):
+            errors.append('Product name is required')
+        elif len(data['product_name']) < 3:
+            errors.append('Product name must be at least 3 characters')
+        
+        # Validate base price
+        try:
+            base_price = float(data.get('base_price', 0))
+            if base_price <= 0:
+                errors.append('Base price must be greater than 0')
+            elif base_price > 10000:
+                warnings.append('Base price is unusually high (over $10,000)')
+        except (ValueError, TypeError):
+            errors.append('Base price must be a valid number')
+        
+        # Validate pricing structure if provided
+        if data.get('pricing'):
+            for term, customer_types in data['pricing'].items():
+                try:
+                    term_int = int(term)
+                    if term_int < 1 or term_int > 10:
+                        warnings.append(f'Unusual term length: {term_int} years')
+                except ValueError:
+                    errors.append(f'Invalid term: {term}')
+                
+                for customer_type, multiplier in customer_types.items():
+                    if customer_type not in ['retail', 'wholesale']:
+                        warnings.append(f'Unusual customer type: {customer_type}')
+                    
+                    try:
+                        mult_float = float(multiplier)
+                        if mult_float <= 0:
+                            errors.append(f'Multiplier must be positive for {term} year {customer_type}')
+                        elif mult_float > 10:
+                            warnings.append(f'High multiplier ({mult_float}) for {term} year {customer_type}')
+                    except (ValueError, TypeError):
+                        errors.append(f'Invalid multiplier for {term} year {customer_type}')
+        
+        validation_result = {
+            'valid': len(errors) == 0,
+            'errors': errors,
+            'warnings': warnings,
+            'suggestions': []
+        }
+        
+        # Add suggestions
+        if not errors:
+            if data.get('product_code') and not data['product_code'].isupper():
+                validation_result['suggestions'].append('Consider using uppercase for product code')
+            
+            if data.get('pricing') and 'wholesale' not in str(data['pricing']):
+                validation_result['suggestions'].append('Consider adding wholesale pricing')
+        
+        return jsonify(success_response(validation_result))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Validation failed: {str(e)}")), 500
+
+
+# ================================
+# PRODUCT CLONING AND TEMPLATES
+# ================================
+
+@app.route('/api/admin/products/<product_code>/clone', methods=['POST'])
+@token_required
+@role_required('admin')
+def clone_product(product_code):
+    """Clone an existing product with new product code"""
+    try:
+        data = request.get_json()
+        new_product_code = data.get('new_product_code')
+        
+        if not new_product_code:
+            return jsonify(error_response('new_product_code is required')), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if source product exists
+        cursor.execute('''
+            SELECT product_name, description, base_price, active 
+            FROM products 
+            WHERE product_code = %s;
+        ''', (product_code,))
+        
+        source_product = cursor.fetchone()
+        if not source_product:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Source product not found')), 404
+        
+        # Check if new product code already exists
+        cursor.execute('SELECT product_code FROM products WHERE product_code = %s;', (new_product_code,))
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('New product code already exists')), 409
+        
+        # Clone the product
+        new_name = data.get('new_name', f"{source_product[0]} (Copy)")
+        cursor.execute('''
+            INSERT INTO products (product_code, product_name, description, base_price, active)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id;
+        ''', (new_product_code, new_name, source_product[2], source_product[3], source_product[4]))
+        
+        new_product_id = cursor.fetchone()[0]
+        
+        # Clone pricing if requested
+        if data.get('clone_pricing', True):
+            cursor.execute('''
+                INSERT INTO pricing (product_code, term_years, customer_type, multiplier)
+                SELECT %s, term_years, customer_type, multiplier
+                FROM pricing 
+                WHERE product_code = %s;
+            ''', (new_product_code, product_code))
+            
+            cloned_pricing_count = cursor.rowcount
+        else:
+            cloned_pricing_count = 0
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Product cloned successfully',
+            'cloned_product': {
+                'id': new_product_id,
+                'product_code': new_product_code,
+                'product_name': new_name,
+                'source_product_code': product_code
+            },
+            'cloned_pricing_records': cloned_pricing_count
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to clone product: {str(e)}")), 500
+
+
+@app.route('/api/admin/products/templates', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_product_templates():
+    """Get predefined product templates"""
+    templates = {
+        'home_protection_basic': {
+            'product_name': 'Basic Home Protection Plan',
+            'description': 'Essential home protection coverage for major systems',
+            'base_price': 199,
+            'suggested_pricing': {
+                1: {'retail': 1.0, 'wholesale': 0.85},
+                2: {'retail': 1.8, 'wholesale': 1.53},
+                3: {'retail': 2.5, 'wholesale': 2.13}
+            },
+            'suggested_features': [
+                'HVAC coverage',
+                'Plumbing protection',
+                '24/7 support'
+            ]
+        },
+        'auto_protection_comprehensive': {
+            'product_name': 'Comprehensive Auto Protection',
+            'description': 'Complete auto protection with roadside assistance',
+            'base_price': 339,
+            'suggested_pricing': {
+                1: {'retail': 1.0, 'wholesale': 0.85},
+                2: {'retail': 1.77, 'wholesale': 1.50},
+                3: {'retail': 2.36, 'wholesale': 2.01},
+                4: {'retail': 2.95, 'wholesale': 2.51},
+                5: {'retail': 3.24, 'wholesale': 2.75}
+            },
+            'suggested_features': [
+                'Auto deductible coverage',
+                'Roadside assistance',
+                'Rental car coverage',
+                'Towing service'
+            ]
+        },
+        'deductible_reimbursement_basic': {
+            'product_name': 'Deductible Reimbursement Plan',
+            'description': 'Insurance deductible coverage and protection',
+            'base_price': 150,
+            'suggested_pricing': {
+                1: {'retail': 1.0, 'wholesale': 0.85},
+                2: {'retail': 1.5, 'wholesale': 1.28},
+                3: {'retail': 1.83, 'wholesale': 1.56}
+            },
+            'suggested_features': [
+                'Deductible coverage',
+                'Identity theft protection',
+                'Fast claims processing'
+            ]
+        }
+    }
+    
+    return jsonify(success_response({
+        'templates': templates,
+        'template_count': len(templates)
+    }))
+
+
+@app.route('/api/admin/products/from-template', methods=['POST'])
+@token_required
+@role_required('admin')
+def create_product_from_template():
+    """Create a new product from a template"""
+    try:
+        data = request.get_json()
+        template_id = data.get('template_id')
+        product_code = data.get('product_code')
+        
+        if not template_id or not product_code:
+            return jsonify(error_response('template_id and product_code are required')), 400
+        
+        # Get template (this would typically fetch from a templates table)
+        templates_response = get_product_templates()
+        templates_data = json.loads(templates_response.data)
+        
+        if template_id not in templates_data['data']['templates']:
+            return jsonify(error_response('Template not found')), 404
+        
+        template = templates_data['data']['templates'][template_id]
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if product code already exists
+        cursor.execute('SELECT product_code FROM products WHERE product_code = %s;', (product_code,))
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Product code already exists')), 409
+        
+        # Create product from template
+        cursor.execute('''
+            INSERT INTO products (product_code, product_name, description, base_price, active)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id;
+        ''', (
+            product_code,
+            data.get('product_name', template['product_name']),
+            data.get('description', template['description']),
+            data.get('base_price', template['base_price']),
+            data.get('active', True)
+        ))
+        
+        product_id = cursor.fetchone()[0]
+        
+        # Add suggested pricing
+        pricing_count = 0
+        for term, customer_types in template['suggested_pricing'].items():
+            for customer_type, multiplier in customer_types.items():
+                cursor.execute('''
+                    INSERT INTO pricing (product_code, term_years, customer_type, multiplier)
+                    VALUES (%s, %s, %s, %s);
+                ''', (product_code, int(term), customer_type, multiplier))
+                pricing_count += 1
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': 'Product created from template successfully',
+            'product': {
+                'id': product_id,
+                'product_code': product_code,
+                'template_used': template_id
+            },
+            'pricing_records_created': pricing_count,
+            'suggested_features': template.get('suggested_features', [])
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create product from template: {str(e)}")), 500
+
+
+# ================================
+# PAYMENT PROCESSING ENDPOINTS
+# ================================
+
+@app.route('/api/payments/process', methods=['POST'])
+def process_payment():
+    """Process payment for quote/contract using existing transactions table"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['quote_id', 'payment_method', 'amount']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+        
+        payment_method = data['payment_method']  # 'credit_card' or 'financing'
+        amount = float(data['amount'])
+        quote_id = data['quote_id']
+        customer_id = data.get('customer_id')
+        policy_id = data.get('policy_id')
+        
+        # Generate transaction number
+        transaction_number = f"TXN-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{quote_id.split('-')[-1]}"
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        try:
+            # Create initial transaction record
+            cursor.execute('''
+                INSERT INTO transactions (
+                    transaction_number, customer_id, policy_id, type, amount, 
+                    currency, status, payment_method, metadata, created_by
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+            ''', (
+                transaction_number,
+                customer_id,
+                policy_id,
+                'payment',
+                amount,
+                'USD',
+                'processing',
+                json.dumps({
+                    'method': payment_method,
+                    'quote_id': quote_id,
+                    **data.get('payment_details', {})
+                }),
+                json.dumps({
+                    'quote_id': quote_id,
+                    'payment_method': payment_method,
+                    'initiated_at': datetime.utcnow().isoformat()
+                }),
+                data.get('user_id')  # If available from auth
+            ))
+            
+            transaction_id = cursor.fetchone()[0]
+            
+            # Process payment based on method
+            if payment_method == 'credit_card':
+                payment_result = process_credit_card_payment(data, amount, transaction_number)
+            elif payment_method == 'financing':
+                payment_result = setup_financing_plan(data, amount, transaction_number)
+            else:
+                cursor.execute('''
+                    UPDATE transactions 
+                    SET status = 'failed', processor_response = %s 
+                    WHERE id = %s;
+                ''', (json.dumps({'error': 'Invalid payment method'}), transaction_id))
+                conn.commit()
+                cursor.close()
+                conn.close()
+                return jsonify(error_response('Invalid payment method')), 400
+            
+            # Update transaction with payment result
+            if payment_result['success']:
+                cursor.execute('''
+                    UPDATE transactions 
+                    SET status = %s, processed_at = CURRENT_TIMESTAMP, 
+                        processor_response = %s, fees = %s, taxes = %s
+                    WHERE id = %s;
+                ''', (
+                    payment_result['status'],
+                    json.dumps(payment_result.get('processor_data', {})),
+                    json.dumps(payment_result.get('fees', {})),
+                    json.dumps(payment_result.get('taxes', {})),
+                    transaction_id
+                ))
+                
+                conn.commit()
+                
+                # If policy_id provided, update policy status
+                if policy_id:
+                    cursor.execute('''
+                        UPDATE policies 
+                        SET status = 'active', payment_status = 'paid', updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s;
+                    ''', (policy_id,))
+                    conn.commit()
+                
+                cursor.close()
+                conn.close()
+                
+                return jsonify(success_response({
+                    'transaction_id': str(transaction_id),
+                    'transaction_number': transaction_number,
+                    'status': payment_result['status'],
+                    'processor_transaction_id': payment_result.get('processor_transaction_id'),
+                    'confirmation_number': f"CAC-{transaction_number}",
+                    'amount': amount,
+                    'currency': 'USD',
+                    'next_steps': payment_result.get('next_steps', []),
+                    'contract_generation': {
+                        'will_generate': True,
+                        'estimated_time': '2-3 business days'
+                    }
+                }))
+            else:
+                # Payment failed
+                cursor.execute('''
+                    UPDATE transactions 
+                    SET status = 'failed', processor_response = %s 
+                    WHERE id = %s;
+                ''', (json.dumps({'error': payment_result.get('error')}), transaction_id))
+                conn.commit()
+                cursor.close()
+                conn.close()
+                
+                return jsonify(error_response(payment_result.get('error', 'Payment processing failed'))), 400
+                
+        except Exception as db_error:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+            raise db_error
+            
+    except Exception as e:
+        return jsonify(error_response(f"Payment processing error: {str(e)}")), 500
+
+
+def process_credit_card_payment(data, amount, transaction_number):
+    """Process credit card payment via Helcim API"""
+    try:
+        # Extract credit card info
+        card_info = data.get('card_info', {})
+        billing_info = data.get('billing_info', {})
+        
+        # Validate card info
+        required_card_fields = ['card_number', 'expiry_month', 'expiry_year', 'cvv']
+        missing_fields = [field for field in required_card_fields if not card_info.get(field)]
+        if missing_fields:
+            return {'success': False, 'error': f"Missing card fields: {', '.join(missing_fields)}"}
+        
+        # In production, integrate with Helcim API
+        # For now, simulate successful payment
+        if amount > 0:
+            # Simulate API call to Helcim
+            processor_transaction_id = f"HELCIM-{transaction_number}"
+            auth_code = f"AUTH{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            
+            # Calculate fees (simulate 2.9% + $0.30 processing fee)
+            processing_fee = round(amount * 0.029 + 0.30, 2)
+            
+            return {
+                'success': True,
+                'status': 'completed',
+                'processor_transaction_id': processor_transaction_id,
+                'processor_data': {
+                    'provider': 'Helcim',
+                    'auth_code': auth_code,
+                    'last_four': card_info['card_number'][-4:],
+                    'card_type': get_card_type(card_info['card_number']),
+                    'processed_at': datetime.utcnow().isoformat()
+                },
+                'fees': {
+                    'processing_fee': processing_fee,
+                    'total_fees': processing_fee
+                },
+                'taxes': {
+                    'sales_tax': round(amount * 0.07, 2),  # 7% sales tax
+                    'tax_rate': 0.07
+                },
+                'next_steps': [
+                    'Payment confirmation email sent',
+                    'Contract will be generated within 2-3 business days',
+                    'You will receive contract via email'
+                ]
+            }
+        else:
+            return {'success': False, 'error': 'Invalid payment amount'}
+            
+    except Exception as e:
+        return {'success': False, 'error': f'Credit card processing failed: {str(e)}'}
+
+
+def setup_financing_plan(data, amount, transaction_number):
+    """Setup financing plan via Supplemental Payment Program"""
+    try:
+        financing_terms = data.get('financing_terms', '12')  # months
+        customer_info = data.get('customer_info', {})
+        
+        # Validate customer info for financing
+        required_fields = ['first_name', 'last_name', 'email', 'phone', 'ssn_last_4']
+        missing_fields = [field for field in required_fields if not customer_info.get(field)]
+        if missing_fields:
+            return {'success': False, 'error': f"Missing customer info: {', '.join(missing_fields)}"}
+        
+        # Calculate monthly payment
+        if financing_terms in ['12', '24']:
+            # 0% APR for 12 and 24 months
+            monthly_payment = round(amount / int(financing_terms), 2)
+            total_amount = amount
+        else:
+            return {'success': False, 'error': 'Invalid financing terms'}
+        
+        # Simulate financing approval
+        financing_id = f"FIN-{transaction_number}"
+        
+        return {
+            'success': True,
+            'status': 'financing_approved',
+            'processor_transaction_id': financing_id,
+            'processor_data': {
+                'provider': 'Supplemental Payment Program',
+                'financing_id': financing_id,
+                'monthly_payment': monthly_payment,
+                'total_amount': total_amount,
+                'terms': f"{financing_terms} months at 0% APR",
+                'first_payment_due': (datetime.utcnow() + timedelta(days=30)).isoformat()
+            },
+            'fees': {
+                'origination_fee': 0.00,  # No fees for 0% APR
+                'total_fees': 0.00
+            },
+            'taxes': {
+                'sales_tax': round(amount * 0.07, 2),
+                'tax_rate': 0.07
+            },
+            'next_steps': [
+                'Financing application approved',
+                f'First payment of ${monthly_payment} due in 30 days',
+                'Contract and payment schedule will be sent via email',
+                'Setup automatic payments in customer portal'
+            ]
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': f'Financing setup failed: {str(e)}'}
+
+
+@app.route('/api/payments/<transaction_id>/status', methods=['GET'])
+def get_payment_status(transaction_id):
+    """Get payment status and details from transactions table"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute('''
+            SELECT 
+                t.id,
+                t.transaction_number,
+                t.customer_id,
+                t.policy_id,
+                t.type,
+                t.amount,
+                t.currency,
+                t.status,
+                t.payment_method,
+                t.processor_response,
+                t.created_at,
+                t.processed_at,
+                t.metadata,
+                t.fees,
+                t.taxes,
+                c.first_name,
+                c.last_name,
+                c.email,
+                p.policy_number,
+                p.product_type
+            FROM transactions t
+            LEFT JOIN customers c ON t.customer_id = c.id
+            LEFT JOIN policies p ON t.policy_id = p.id
+            WHERE t.id = %s OR t.transaction_number = %s;
+        ''', (transaction_id, transaction_id))
+        
+        transaction = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not transaction:
+            return jsonify(error_response('Transaction not found')), 404
+        
+        # Convert to proper format
+        transaction_dict = dict(transaction)
+        transaction_dict['amount'] = float(transaction_dict['amount'])
+        transaction_dict['created_at'] = transaction_dict['created_at'].isoformat() if transaction_dict['created_at'] else None
+        transaction_dict['processed_at'] = transaction_dict['processed_at'].isoformat() if transaction_dict['processed_at'] else None
+        
+        # Parse JSON fields
+        for json_field in ['payment_method', 'processor_response', 'metadata', 'fees', 'taxes']:
+            if transaction_dict[json_field]:
+                transaction_dict[json_field] = transaction_dict[json_field]
+            else:
+                transaction_dict[json_field] = {}
+        
+        return jsonify(success_response(transaction_dict))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get payment status: {str(e)}")), 500
+
+
+@app.route('/api/payments/history', methods=['GET'])
+@token_required
+def get_payment_history():
+    """Get payment history for logged-in user"""
+    try:
+        user_id = request.current_user.get('user_id')
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
+        status_filter = request.args.get('status')
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        
+        # Filter by user's customer record
+        cursor.execute('SELECT id FROM customers WHERE user_id = %s;', (user_id,))
+        customer_record = cursor.fetchone()
+        
+        if customer_record:
+            where_conditions.append('t.customer_id = %s')
+            params.append(customer_record['id'])
+        else:
+            # If no customer record, show transactions created by this user
+            where_conditions.append('t.created_by = %s')
+            params.append(user_id)
+        
+        if status_filter:
+            where_conditions.append('t.status = %s')
+            params.append(status_filter)
+        
+        where_clause = ' AND '.join(where_conditions) if where_conditions else 'TRUE'
+        
+        # Get total count
+        cursor.execute(f'''
+            SELECT COUNT(*) 
+            FROM transactions t 
+            WHERE {where_clause};
+        ''', params)
+        total_count = cursor.fetchone()['count']
+        
+        # Get paginated results
+        offset = (page - 1) * per_page
+        cursor.execute(f'''
+            SELECT 
+                t.id,
+                t.transaction_number,
+                t.amount,
+                t.currency,
+                t.status,
+                t.payment_method,
+                t.created_at,
+                t.processed_at,
+                t.metadata,
+                p.policy_number,
+                p.product_type
+            FROM transactions t
+            LEFT JOIN policies p ON t.policy_id = p.id
+            WHERE {where_clause}
+            ORDER BY t.created_at DESC
+            LIMIT %s OFFSET %s;
+        ''', params + [per_page, offset])
+        
+        transactions = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Convert to proper format
+        transactions_list = []
+        for txn in transactions:
+            txn_dict = dict(txn)
+            txn_dict['amount'] = float(txn_dict['amount'])
+            txn_dict['created_at'] = txn_dict['created_at'].isoformat() if txn_dict['created_at'] else None
+            txn_dict['processed_at'] = txn_dict['processed_at'].isoformat() if txn_dict['processed_at'] else None
+            
+            # Parse payment_method and metadata
+            if txn_dict['payment_method']:
+                txn_dict['payment_method'] = txn_dict['payment_method']
+            else:
+                txn_dict['payment_method'] = {}
+                
+            if txn_dict['metadata']:
+                txn_dict['metadata'] = txn_dict['metadata']
+            else:
+                txn_dict['metadata'] = {}
+            
+            transactions_list.append(txn_dict)
+        
+        return jsonify(success_response({
+            'transactions': transactions_list,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total_count,
+                'pages': (total_count + per_page - 1) // per_page
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get payment history: {str(e)}")), 500
+
+
+@app.route('/api/payments/<transaction_id>/refund', methods=['POST'])
+@token_required
+@role_required('admin')
+def process_refund(transaction_id):
+    """Process payment refund (admin only)"""
+    try:
+        data = request.get_json()
+        refund_amount = data.get('refund_amount')
+        refund_reason = data.get('reason', 'Customer request')
+        admin_user_id = request.current_user.get('user_id')
+        
+        if not refund_amount:
+            return jsonify(error_response('refund_amount is required')), 400
+        
+        refund_amount = float(refund_amount)
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get original transaction
+        cursor.execute('''
+            SELECT id, transaction_number, amount, status, payment_method, customer_id, policy_id
+            FROM transactions 
+            WHERE id = %s OR transaction_number = %s;
+        ''', (transaction_id, transaction_id))
+        
+        original_txn = cursor.fetchone()
+        if not original_txn:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Original transaction not found')), 404
+        
+        if original_txn['status'] != 'completed':
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Can only refund completed transactions')), 400
+        
+        if refund_amount > float(original_txn['amount']):
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Refund amount cannot exceed original transaction amount')), 400
+        
+        # Create refund transaction
+        refund_transaction_number = f"REF-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        
+        cursor.execute('''
+            INSERT INTO transactions (
+                transaction_number, customer_id, policy_id, type, amount, 
+                currency, status, payment_method, metadata, created_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
+        ''', (
+            refund_transaction_number,
+            original_txn['customer_id'],
+            original_txn['policy_id'],
+            'refund',
+            -refund_amount,  # Negative amount for refund
+            'USD',
+            'processing',
+            original_txn['payment_method'],
+            json.dumps({
+                'refund_reason': refund_reason,
+                'original_transaction_id': str(original_txn['id']),
+                'original_transaction_number': original_txn['transaction_number'],
+                'refund_type': 'partial' if refund_amount < float(original_txn['amount']) else 'full'
+            }),
+            admin_user_id
+        ))
+        
+        refund_txn_id = cursor.fetchone()[0]
+        
+        # In production, process refund via payment gateway
+        # For now, simulate successful refund
+        cursor.execute('''
+            UPDATE transactions 
+            SET status = 'completed', 
+                processed_at = CURRENT_TIMESTAMP,
+                processor_response = %s
+            WHERE id = %s;
+        ''', (
+            json.dumps({
+                'refund_id': f"HELCIM-REF-{refund_transaction_number}",
+                'status': 'processed',
+                'estimated_completion': '3-5 business days'
+            }),
+            refund_txn_id
+        ))
+        
+        # If full refund, update policy status
+        if refund_amount == float(original_txn['amount']) and original_txn['policy_id']:
+            cursor.execute('''
+                UPDATE policies 
+                SET status = 'cancelled', payment_status = 'refunded', updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s;
+            ''', (original_txn['policy_id'],))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'refund_transaction_id': str(refund_txn_id),
+            'refund_transaction_number': refund_transaction_number,
+            'original_transaction_id': str(original_txn['id']),
+            'amount': refund_amount,
+            'status': 'completed',
+            'reason': refund_reason,
+            'processed_at': datetime.utcnow().isoformat() + 'Z',
+            'estimated_completion': '3-5 business days'
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Refund processing failed: {str(e)}")), 500
+
+
+# ================================
+# PAYMENT ANALYTICS FOR ADMIN
+# ================================
+
+@app.route('/api/admin/payments/analytics', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_payment_analytics():
+    """Get payment analytics for admin dashboard"""
+    try:
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Build date filter
+        date_filter = ""
+        params = []
+        if date_from and date_to:
+            date_filter = "WHERE created_at BETWEEN %s AND %s"
+            params = [date_from, date_to]
+        
+        # Get overall stats
+        cursor.execute(f'''
+            SELECT 
+                COUNT(*) as total_transactions,
+                COUNT(*) FILTER (WHERE type = 'payment') as payments,
+                COUNT(*) FILTER (WHERE type = 'refund') as refunds,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed,
+                COUNT(*) FILTER (WHERE status = 'failed') as failed,
+                COALESCE(SUM(amount) FILTER (WHERE type = 'payment' AND status = 'completed'), 0) as total_revenue,
+                COALESCE(SUM(amount) FILTER (WHERE type = 'refund' AND status = 'completed'), 0) as total_refunds,
+                COALESCE(AVG(amount) FILTER (WHERE type = 'payment' AND status = 'completed'), 0) as avg_transaction
+            FROM transactions 
+            {date_filter};
+        ''', params)
+        
+        overall_stats = cursor.fetchone()
+        
+        # Get payment method breakdown
+        cursor.execute(f'''
+            SELECT 
+                payment_method->>'method' as method,
+                COUNT(*) as count,
+                COALESCE(SUM(amount) FILTER (WHERE status = 'completed'), 0) as total_amount
+            FROM transactions 
+            WHERE type = 'payment' {date_filter.replace('WHERE', 'AND') if date_filter else ''}
+            GROUP BY payment_method->>'method';
+        ''', params)
+        
+        payment_methods = cursor.fetchall()
+        
+        # Get daily revenue (last 30 days)
+        cursor.execute('''
+            SELECT 
+                DATE(created_at) as date,
+                COUNT(*) as transaction_count,
+                COALESCE(SUM(amount) FILTER (WHERE type = 'payment' AND status = 'completed'), 0) as daily_revenue
+            FROM transactions 
+            WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY DATE(created_at)
+            ORDER BY date;
+        ''')
+        
+        daily_stats = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        analytics_data = {
+            'overview': {
+                'total_transactions': overall_stats[0],
+                'payments': overall_stats[1],
+                'refunds': overall_stats[2],
+                'completed': overall_stats[3],
+                'failed': overall_stats[4],
+                'total_revenue': float(overall_stats[5]),
+                'total_refunds': float(overall_stats[6]),
+                'net_revenue': float(overall_stats[5]) + float(overall_stats[6]),  # Adding negative refunds
+                'avg_transaction': float(overall_stats[7]),
+                'success_rate': round((overall_stats[3] / overall_stats[0] * 100), 2) if overall_stats[0] > 0 else 0
+            },
+            'payment_methods': [
+                {
+                    'method': method[0] or 'Unknown',
+                    'count': method[1],
+                    'total_amount': float(method[2])
+                } for method in payment_methods
+            ],
+            'daily_revenue': [
+                {
+                    'date': stat[0].isoformat(),
+                    'transaction_count': stat[1],
+                    'revenue': float(stat[2])
+                } for stat in daily_stats
+            ]
+        }
+        
+        return jsonify(success_response(analytics_data))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get payment analytics: {str(e)}")), 500
+
+
+# ================================
+# PAYMENT VALIDATION HELPERS
+# ================================
+
+def validate_credit_card(card_number):
+    """Basic credit card validation using Luhn algorithm"""
+    def luhn_check(card_num):
+        def digits_of(n):
+            return [int(d) for d in str(n)]
+        digits = digits_of(card_num)
+        odd_digits = digits[-1::-2]
+        even_digits = digits[-2::-2]
+        checksum = sum(odd_digits)
+        for d in even_digits:
+            checksum += sum(digits_of(d*2))
+        return checksum % 10 == 0
+    
+    # Remove spaces and dashes
+    card_number = ''.join(card_number.split()).replace('-', '')
+    
+    if not card_number.isdigit():
+        return False, 'Card number must contain only digits'
+    
+    if len(card_number) < 13 or len(card_number) > 19:
+        return False, 'Invalid card number length'
+    
+    if not luhn_check(card_number):
+        return False, 'Invalid card number'
+    
+    return True, 'Valid card number'
+
+
+def get_card_type(card_number):
+    """Determine credit card type from number"""
+    card_number = ''.join(card_number.split()).replace('-', '')
+    
+    if card_number.startswith('4'):
+        return 'Visa'
+    elif card_number.startswith(('51', '52', '53', '54', '55')) or card_number.startswith('22'):
+        return 'MasterCard'
+    elif card_number.startswith(('34', '37')):
+        return 'American Express'
+    elif card_number.startswith('6011') or card_number.startswith('65'):
+        return 'Discover'
+    else:
+        return 'Unknown'
+
+
+@app.route('/api/payments/validate-card', methods=['POST'])
+def validate_card_endpoint():
+    """Validate credit card information"""
+    try:
+        data = request.get_json()
+        card_number = data.get('card_number', '')
+        
+        is_valid, message = validate_credit_card(card_number)
+        card_type = get_card_type(card_number) if is_valid else None
+        
+        return jsonify(success_response({
+            'valid': is_valid,
+            'message': message,
+            'card_type': card_type,
+            'last_four': card_number[-4:] if is_valid else None
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Card validation failed: {str(e)}")), 500
+
+
+# ================================
+# PAYMENT WEBHOOK HANDLERS
+# ================================
+
+@app.route('/api/webhooks/helcim', methods=['POST'])
+def helcim_webhook():
+    """Handle Helcim payment webhooks"""
+    try:
+        data = request.get_json()
+        
+        # Verify webhook signature (in production)
+        # if not verify_helcim_signature(request.headers, request.data):
+        #     return jsonify({'error': 'Invalid signature'}), 400
+        
+        transaction_number = data.get('transaction_number')
+        status = data.get('status')
+        processor_data = data.get('processor_data', {})
+        
+        if not transaction_number:
+            return jsonify({'error': 'Missing transaction_number'}), 400
+        
+        # Update transaction status in database
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE transactions 
+            SET status = %s, 
+                processed_at = CURRENT_TIMESTAMP,
+                processor_response = %s
+            WHERE transaction_number = %s;
+        ''', (status, json.dumps(processor_data), transaction_number))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Send confirmation email if successful
+        if status == 'completed':
+            # send_payment_confirmation_email(transaction_number)
+            pass
+        
+        return jsonify({'received': True}), 200
+        
+    except Exception as e:
+        print(f"Webhook error: {str(e)}")
+        return jsonify({'error': 'Webhook processing failed'}), 500
+
+
+@app.route('/api/webhooks/financing', methods=['POST'])
+def financing_webhook():
+    """Handle financing company webhooks"""
+    try:
+        data = request.get_json()
+        
+        transaction_number = data.get('transaction_number')
+        status = data.get('status')
+        financing_data = data.get('financing_data', {})
+        
+        if not transaction_number:
+            return jsonify({'error': 'Missing transaction_number'}), 400
+        
+        # Update transaction status in database
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE transactions 
+            SET status = %s, 
+                processed_at = CURRENT_TIMESTAMP,
+                processor_response = %s
+            WHERE transaction_number = %s;
+        ''', (status, json.dumps(financing_data), transaction_number))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'received': True}), 200
+        
+    except Exception as e:
+        print(f"Financing webhook error: {str(e)}")
+        return jsonify({'error': 'Webhook processing failed'}), 500
     
 
 # For local development only
