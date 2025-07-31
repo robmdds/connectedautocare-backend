@@ -1,365 +1,571 @@
 #!/usr/bin/env python3
 """
 VSC (Vehicle Service Contract) Rates Data
-Complete rate cards and vehicle classification for VSC pricing
+Database-driven rate cards and vehicle classification for VSC pricing
 """
 
-# Vehicle Classification System
-VEHICLE_CLASSIFICATION = {
+import psycopg2
+import os
+import logging
+from datetime import datetime
+from typing import Dict, Optional, List, Tuple
+from functools import lru_cache
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Database connection
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require")
+
+# Fallback vehicle classification (kept for backup/offline use)
+FALLBACK_VEHICLE_CLASSIFICATION = {
     # Class A - Most Reliable (Lowest Rates)
-    'honda': 'A',
-    'acura': 'A',
-    'toyota': 'A',
-    'lexus': 'A',
-    'nissan': 'A',
-    'infiniti': 'A',
-    'hyundai': 'A',
-    'kia': 'A',
-    'mazda': 'A',
-    'mitsubishi': 'A',
-    'scion': 'A',
-    'subaru': 'A',
+    'honda': 'A', 'acura': 'A', 'toyota': 'A', 'lexus': 'A', 'nissan': 'A',
+    'infiniti': 'A', 'hyundai': 'A', 'kia': 'A', 'mazda': 'A', 'mitsubishi': 'A',
+    'scion': 'A', 'subaru': 'A',
     
     # Class B - Moderate Risk (Medium Rates)
-    'buick': 'B',
-    'chevrolet': 'B',
-    'chrysler': 'B',
-    'dodge': 'B',
-    'ford': 'B',
-    'gmc': 'B',
-    'jeep': 'B',
-    'mercury': 'B',
-    'oldsmobile': 'B',
-    'plymouth': 'B',
-    'pontiac': 'B',
-    'saturn': 'B',
-    'ram': 'B',
+    'buick': 'B', 'chevrolet': 'B', 'chrysler': 'B', 'dodge': 'B', 'ford': 'B',
+    'gmc': 'B', 'jeep': 'B', 'mercury': 'B', 'oldsmobile': 'B', 'plymouth': 'B',
+    'pontiac': 'B', 'saturn': 'B', 'ram': 'B',
     
     # Class C - Higher Risk (Highest Rates)
-    'cadillac': 'C',
-    'lincoln': 'C',
-    'volkswagen': 'C',
-    'volvo': 'C',
-    'bmw': 'C',
-    'mercedes-benz': 'C',
-    'mercedes': 'C',
-    'audi': 'C',
-    'jaguar': 'C',
-    'land rover': 'C',
-    'porsche': 'C',
-    'saab': 'C',
-    'mini': 'C'
+    'cadillac': 'C', 'lincoln': 'C', 'volkswagen': 'C', 'volvo': 'C', 'bmw': 'C',
+    'mercedes-benz': 'C', 'mercedes': 'C', 'audi': 'C', 'jaguar': 'C',
+    'land rover': 'C', 'porsche': 'C', 'saab': 'C', 'mini': 'C'
 }
 
-# VSC Base Rates by Vehicle Class and Coverage Level
-VSC_RATES = {
-    'A': {  # Class A - Most Reliable
-        'silver': {
-            'base_rate': 800,
-            'description': 'Basic powertrain coverage'
-        },
-        'gold': {
-            'base_rate': 1200,
-            'description': 'Enhanced coverage including major components'
-        },
-        'platinum': {
-            'base_rate': 1600,
-            'description': 'Comprehensive coverage with exclusionary benefits'
-        }
-    },
-    'B': {  # Class B - Moderate Risk
-        'silver': {
-            'base_rate': 1000,
-            'description': 'Basic powertrain coverage'
-        },
-        'gold': {
-            'base_rate': 1500,
-            'description': 'Enhanced coverage including major components'
-        },
-        'platinum': {
-            'base_rate': 2000,
-            'description': 'Comprehensive coverage with exclusionary benefits'
-        }
-    },
-    'C': {  # Class C - Higher Risk
-        'silver': {
-            'base_rate': 1400,
-            'description': 'Basic powertrain coverage'
-        },
-        'gold': {
-            'base_rate': 2100,
-            'description': 'Enhanced coverage including major components'
-        },
-        'platinum': {
-            'base_rate': 2800,
-            'description': 'Comprehensive coverage with exclusionary benefits'
-        }
-    }
-}
+class VSCRateManager:
+    """Database-driven VSC rate management"""
+    
+    def __init__(self, database_url=DATABASE_URL):
+        self.database_url = database_url
+        self._connection = None
+        
+    def get_connection(self):
+        """Get database connection with connection pooling"""
+        if self._connection is None or self._connection.closed:
+            try:
+                self._connection = psycopg2.connect(self.database_url)
+            except psycopg2.Error as e:
+                logger.error(f"Database connection failed: {e}")
+                raise
+        return self._connection
+    
+    def close_connection(self):
+        """Close database connection"""
+        if self._connection and not self._connection.closed:
+            self._connection.close()
+            self._connection = None
+    
+    @lru_cache(maxsize=128)
+    def get_vehicle_classification(self) -> Dict[str, str]:
+        """
+        Get vehicle classification from database with caching
+        
+        Returns:
+            dict: Make to class mapping
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT make, vehicle_class, active 
+                        FROM vsc_vehicle_classes 
+                        WHERE active = TRUE
+                        ORDER BY make;
+                    """)
+                    
+                    classification = {}
+                    for make, vehicle_class, active in cursor.fetchall():
+                        classification[make.lower().strip()] = vehicle_class
+                    
+                    return classification if classification else FALLBACK_VEHICLE_CLASSIFICATION
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to load vehicle classification from database: {e}")
+            return FALLBACK_VEHICLE_CLASSIFICATION
+    
+    @lru_cache(maxsize=64)
+    def get_coverage_levels(self) -> Dict[str, Dict]:
+        """
+        Get coverage levels from database with caching
+        
+        Returns:
+            dict: Coverage level information
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT level_code, level_name, description, active 
+                        FROM vsc_coverage_levels 
+                        WHERE active = TRUE
+                        ORDER BY display_order;
+                    """)
+                    
+                    coverage_levels = {}
+                    for level_code, level_name, description, active in cursor.fetchall():
+                        coverage_levels[level_code] = {
+                            'name': level_name,
+                            'description': description
+                        }
+                    
+                    return coverage_levels
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to load coverage levels from database: {e}")
+            return {
+                'silver': {'name': 'Silver Coverage', 'description': 'Basic powertrain protection'},
+                'gold': {'name': 'Gold Coverage', 'description': 'Enhanced component protection'},
+                'platinum': {'name': 'Platinum Coverage', 'description': 'Comprehensive exclusionary coverage'}
+            }
+    
+    @lru_cache(maxsize=32)
+    def get_term_multipliers(self) -> Dict[int, float]:
+        """
+        Get term multipliers from database with caching
+        
+        Returns:
+            dict: Term to multiplier mapping
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT term_months, multiplier 
+                        FROM vsc_term_multipliers 
+                        WHERE active = TRUE
+                        ORDER BY term_months;
+                    """)
+                    
+                    multipliers = {}
+                    for term_months, multiplier in cursor.fetchall():
+                        multipliers[term_months] = float(multiplier)
+                    
+                    return multipliers if multipliers else {
+                        12: 0.40, 24: 0.70, 36: 1.00, 48: 1.25, 60: 1.45, 72: 1.60
+                    }
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to load term multipliers from database: {e}")
+            return {12: 0.40, 24: 0.70, 36: 1.00, 48: 1.25, 60: 1.45, 72: 1.60}
+    
+    @lru_cache(maxsize=16)
+    def get_deductible_multipliers(self) -> Dict[int, float]:
+        """
+        Get deductible multipliers from database with caching
+        
+        Returns:
+            dict: Deductible to multiplier mapping
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT deductible_amount, multiplier 
+                        FROM vsc_deductible_multipliers 
+                        WHERE active = TRUE
+                        ORDER BY deductible_amount;
+                    """)
+                    
+                    multipliers = {}
+                    for deductible_amount, multiplier in cursor.fetchall():
+                        multipliers[deductible_amount] = float(multiplier)
+                    
+                    return multipliers if multipliers else {
+                        0: 1.25, 50: 1.15, 100: 1.00, 200: 0.90, 500: 0.75, 1000: 0.65
+                    }
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to load deductible multipliers from database: {e}")
+            return {0: 1.25, 50: 1.15, 100: 1.00, 200: 0.90, 500: 0.75, 1000: 0.65}
+    
+    @lru_cache(maxsize=16)
+    def get_mileage_multipliers(self) -> List[Dict]:
+        """
+        Get mileage multipliers from database with caching
+        
+        Returns:
+            list: Mileage multiplier configurations
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT category, min_mileage, max_mileage, multiplier, description
+                        FROM vsc_mileage_multipliers 
+                        WHERE active = TRUE
+                        ORDER BY display_order;
+                    """)
+                    
+                    multipliers = []
+                    for category, min_mileage, max_mileage, multiplier, description in cursor.fetchall():
+                        multipliers.append({
+                            'category': category,
+                            'min_mileage': min_mileage,
+                            'max_mileage': max_mileage,
+                            'multiplier': float(multiplier),
+                            'description': description
+                        })
+                    
+                    return multipliers if multipliers else [
+                        {'category': 'low', 'min_mileage': 0, 'max_mileage': 50000, 'multiplier': 1.00, 'description': '0-50k miles'},
+                        {'category': 'medium', 'min_mileage': 50001, 'max_mileage': 75000, 'multiplier': 1.15, 'description': '50k-75k miles'},
+                        {'category': 'high', 'min_mileage': 75001, 'max_mileage': 100000, 'multiplier': 1.30, 'description': '75k-100k miles'},
+                        {'category': 'very_high', 'min_mileage': 100001, 'max_mileage': 125000, 'multiplier': 1.50, 'description': '100k-125k miles'},
+                        {'category': 'extreme', 'min_mileage': 125001, 'max_mileage': 999999, 'multiplier': 1.75, 'description': '125k+ miles'}
+                    ]
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to load mileage multipliers from database: {e}")
+            return [
+                {'category': 'low', 'min_mileage': 0, 'max_mileage': 50000, 'multiplier': 1.00, 'description': '0-50k miles'},
+                {'category': 'medium', 'min_mileage': 50001, 'max_mileage': 75000, 'multiplier': 1.15, 'description': '50k-75k miles'},
+                {'category': 'high', 'min_mileage': 75001, 'max_mileage': 100000, 'multiplier': 1.30, 'description': '75k-100k miles'},
+                {'category': 'very_high', 'min_mileage': 100001, 'max_mileage': 125000, 'multiplier': 1.50, 'description': '100k-125k miles'},
+                {'category': 'extreme', 'min_mileage': 125001, 'max_mileage': 999999, 'multiplier': 1.75, 'description': '125k+ miles'}
+            ]
+    
+    @lru_cache(maxsize=16)
+    def get_age_multipliers(self) -> List[Dict]:
+        """
+        Get age multipliers from database with caching
+        
+        Returns:
+            list: Age multiplier configurations
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT category, min_age, max_age, multiplier, description
+                        FROM vsc_age_multipliers 
+                        WHERE active = TRUE
+                        ORDER BY display_order;
+                    """)
+                    
+                    multipliers = []
+                    for category, min_age, max_age, multiplier, description in cursor.fetchall():
+                        multipliers.append({
+                            'category': category,
+                            'min_age': min_age,
+                            'max_age': max_age,
+                            'multiplier': float(multiplier),
+                            'description': description
+                        })
+                    
+                    return multipliers if multipliers else [
+                        {'category': 'new', 'min_age': 0, 'max_age': 3, 'multiplier': 1.00, 'description': '0-3 years'},
+                        {'category': 'recent', 'min_age': 4, 'max_age': 6, 'multiplier': 1.15, 'description': '4-6 years'},
+                        {'category': 'older', 'min_age': 7, 'max_age': 10, 'multiplier': 1.35, 'description': '7-10 years'},
+                        {'category': 'old', 'min_age': 11, 'max_age': 999, 'multiplier': 1.60, 'description': '11+ years'}
+                    ]
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to load age multipliers from database: {e}")
+            return [
+                {'category': 'new', 'min_age': 0, 'max_age': 3, 'multiplier': 1.00, 'description': '0-3 years'},
+                {'category': 'recent', 'min_age': 4, 'max_age': 6, 'multiplier': 1.15, 'description': '4-6 years'},
+                {'category': 'older', 'min_age': 7, 'max_age': 10, 'multiplier': 1.35, 'description': '7-10 years'},
+                {'category': 'old', 'min_age': 11, 'max_age': 999, 'multiplier': 1.60, 'description': '11+ years'}
+            ]
+    
+    def get_exact_rate(self, vehicle_class: str, coverage_level: str, term_months: int, mileage: int) -> Optional[float]:
+        """
+        Get exact rate from the rate matrix table (PDF data)
+        
+        Args:
+            vehicle_class: Vehicle class (A, B, C)
+            coverage_level: Coverage level (silver, gold, platinum)
+            term_months: Contract term in months
+            mileage: Vehicle mileage
+            
+        Returns:
+            float: Exact rate if found, None otherwise
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT rate_amount 
+                        FROM vsc_rate_matrix 
+                        WHERE vehicle_class = %s 
+                        AND coverage_level = %s 
+                        AND term_months = %s 
+                        AND min_mileage <= %s 
+                        AND max_mileage >= %s
+                        AND active = TRUE
+                        ORDER BY effective_date DESC
+                        LIMIT 1;
+                    """, (vehicle_class, coverage_level, term_months, mileage, mileage))
+                    
+                    result = cursor.fetchone()
+                    return float(result[0]) if result else None
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to get exact rate from database: {e}")
+            return None
+    
+    def get_base_rate(self, vehicle_class: str, coverage_level: str) -> float:
+        """
+        Get base rate for vehicle class and coverage level
+        
+        Args:
+            vehicle_class: Vehicle class (A, B, or C)
+            coverage_level: Coverage level (silver, gold, platinum)
+            
+        Returns:
+            float: Base rate
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT base_rate 
+                        FROM vsc_base_rates 
+                        WHERE vehicle_class = %s 
+                        AND coverage_level = %s 
+                        AND active = TRUE
+                        ORDER BY effective_date DESC
+                        LIMIT 1;
+                    """, (vehicle_class, coverage_level))
+                    
+                    result = cursor.fetchone()
+                    if result:
+                        return float(result[0])
+                    
+                    # Fallback to estimated base rates
+                    fallback_rates = {
+                        'A': {'silver': 1500, 'gold': 1580, 'platinum': 1650},
+                        'B': {'silver': 1650, 'gold': 1750, 'platinum': 1900},
+                        'C': {'silver': 1850, 'gold': 2000, 'platinum': 2600}
+                    }
+                    return fallback_rates.get(vehicle_class, {}).get(coverage_level, 1500)
+                    
+        except psycopg2.Error as e:
+            logger.warning(f"Failed to get base rate from database: {e}")
+            # Fallback rates
+            fallback_rates = {
+                'A': {'silver': 1500, 'gold': 1580, 'platinum': 1650},
+                'B': {'silver': 1650, 'gold': 1750, 'platinum': 1900},
+                'C': {'silver': 1850, 'gold': 2000, 'platinum': 2600}
+            }
+            return fallback_rates.get(vehicle_class, {}).get(coverage_level, 1500)
 
-# Coverage Level Descriptions
-COVERAGE_DESCRIPTIONS = {
-    'silver': {
-        'name': 'Silver Coverage',
-        'description': 'Basic powertrain protection',
-        'covered_components': [
-            'Engine (internal lubricated parts)',
-            'Transmission (internal parts)',
-            'Drive axle assembly',
-            'Transfer case (4WD vehicles)',
-            'Seals and gaskets for covered components'
-        ],
-        'benefits': [
-            '24/7 roadside assistance',
-            'Towing coverage',
-            'Rental car allowance',
-            'Trip interruption coverage'
-        ]
-    },
-    'gold': {
-        'name': 'Gold Coverage',
-        'description': 'Enhanced component protection',
-        'covered_components': [
-            'All Silver coverage components',
-            'Air conditioning system',
-            'Electrical system components',
-            'Fuel system components',
-            'Cooling system components',
-            'Steering system components',
-            'Brake system components (excluding pads/shoes)',
-            'Suspension system components'
-        ],
-        'benefits': [
-            'All Silver benefits',
-            'Enhanced rental car allowance',
-            'Extended trip interruption coverage',
-            'Substitute transportation'
-        ]
-    },
-    'platinum': {
-        'name': 'Platinum Coverage',
-        'description': 'Comprehensive exclusionary coverage',
-        'covered_components': [
-            'All vehicle components EXCEPT those specifically excluded',
-            'Most comprehensive coverage available'
-        ],
-        'exclusions': [
-            'Maintenance items (oil, filters, belts, hoses)',
-            'Wear items (brake pads, wiper blades)',
-            'Glass and body panels',
-            'Interior and exterior trim'
-        ],
-        'benefits': [
-            'All Gold benefits',
-            'Maximum rental car allowance',
-            'Comprehensive trip interruption coverage',
-            'Emergency expense coverage',
-            'Concierge services'
-        ]
-    }
-}
+# Global rate manager instance
+rate_manager = VSCRateManager()
 
-# Term Options and Multipliers
-TERM_MULTIPLIERS = {
-    12: 0.40,   # 12 months
-    24: 0.70,   # 24 months
-    36: 1.00,   # 36 months (base)
-    48: 1.25,   # 48 months
-    60: 1.45,   # 60 months
-    72: 1.60    # 72 months
-}
-
-# Deductible Options and Multipliers
-DEDUCTIBLE_MULTIPLIERS = {
-    0: 1.25,     # $0 deductible
-    50: 1.15,    # $50 deductible
-    100: 1.00,   # $100 deductible (base)
-    200: 0.90,   # $200 deductible
-    500: 0.75,   # $500 deductible
-    1000: 0.65   # $1000 deductible
-}
-
-# Mileage Multipliers
-MILEAGE_MULTIPLIERS = {
-    'low': {'max': 50000, 'multiplier': 1.00},      # 0-50k miles
-    'medium': {'max': 75000, 'multiplier': 1.15},   # 50k-75k miles
-    'high': {'max': 100000, 'multiplier': 1.30},    # 75k-100k miles
-    'very_high': {'max': 125000, 'multiplier': 1.50}, # 100k-125k miles
-    'extreme': {'max': 999999, 'multiplier': 1.75}   # 125k+ miles
-}
-
-# Age Multipliers (based on vehicle age)
-AGE_MULTIPLIERS = {
-    'new': {'max_age': 3, 'multiplier': 1.00},       # 0-3 years
-    'recent': {'max_age': 6, 'multiplier': 1.15},    # 4-6 years
-    'older': {'max_age': 10, 'multiplier': 1.35},    # 7-10 years
-    'old': {'max_age': 999, 'multiplier': 1.60}      # 11+ years
-}
-
-def get_vehicle_class(make):
+def get_vehicle_class(make: str) -> str:
     """
     Get vehicle class for a given make
     
     Args:
-        make (str): Vehicle make
+        make: Vehicle make
         
     Returns:
         str: Vehicle class (A, B, or C)
     """
     make_lower = make.lower().strip()
+    classification = rate_manager.get_vehicle_classification()
     
     # Direct lookup
-    if make_lower in VEHICLE_CLASSIFICATION:
-        return VEHICLE_CLASSIFICATION[make_lower]
+    if make_lower in classification:
+        return classification[make_lower]
     
     # Partial match for compound names
-    for vehicle_make, vehicle_class in VEHICLE_CLASSIFICATION.items():
+    for vehicle_make, vehicle_class in classification.items():
         if vehicle_make in make_lower or make_lower in vehicle_make:
             return vehicle_class
     
     # Default to Class B if not found
     return 'B'
 
-def get_base_rate(vehicle_class, coverage_level):
+def get_base_rate(vehicle_class: str, coverage_level: str) -> float:
     """
     Get base rate for vehicle class and coverage level
     
     Args:
-        vehicle_class (str): Vehicle class (A, B, or C)
-        coverage_level (str): Coverage level (silver, gold, platinum)
+        vehicle_class: Vehicle class (A, B, or C)
+        coverage_level: Coverage level (silver, gold, platinum)
         
     Returns:
-        int: Base rate
+        float: Base rate
     """
-    return VSC_RATES.get(vehicle_class, {}).get(coverage_level, {}).get('base_rate', 1500)
+    return rate_manager.get_base_rate(vehicle_class, coverage_level)
 
-def get_mileage_multiplier(mileage):
+def get_mileage_multiplier(mileage: int) -> float:
     """
     Get mileage multiplier based on vehicle mileage
     
     Args:
-        mileage (int): Vehicle mileage
+        mileage: Vehicle mileage
         
     Returns:
         float: Mileage multiplier
     """
-    for category, config in MILEAGE_MULTIPLIERS.items():
-        if mileage <= config['max']:
+    mileage_multipliers = rate_manager.get_mileage_multipliers()
+    
+    for config in mileage_multipliers:
+        if config['min_mileage'] <= mileage <= config['max_mileage']:
             return config['multiplier']
-    return MILEAGE_MULTIPLIERS['extreme']['multiplier']
+    
+    # Fallback to highest multiplier
+    return 1.75
 
-def get_age_multiplier(vehicle_age):
+def get_age_multiplier(vehicle_age: int) -> float:
     """
     Get age multiplier based on vehicle age
     
     Args:
-        vehicle_age (int): Vehicle age in years
+        vehicle_age: Vehicle age in years
         
     Returns:
         float: Age multiplier
     """
-    for category, config in AGE_MULTIPLIERS.items():
-        if vehicle_age <= config['max_age']:
+    age_multipliers = rate_manager.get_age_multipliers()
+    
+    for config in age_multipliers:
+        if config['min_age'] <= vehicle_age <= config['max_age']:
             return config['multiplier']
-    return AGE_MULTIPLIERS['old']['multiplier']
+    
+    # Fallback to highest multiplier
+    return 1.60
 
-def get_vsc_coverage_options():
+def get_vsc_coverage_options() -> Dict:
     """
     Get all available VSC coverage options
     
     Returns:
         dict: Complete coverage options
     """
+    coverage_levels = rate_manager.get_coverage_levels()
+    term_multipliers = rate_manager.get_term_multipliers()
+    deductible_multipliers = rate_manager.get_deductible_multipliers()
+    classification = rate_manager.get_vehicle_classification()
+    
     return {
-        'coverage_levels': {
-            level: {
-                'name': info['name'],
-                'description': info['description'],
-                'base_rates': {
-                    vehicle_class: VSC_RATES[vehicle_class][level]['base_rate']
-                    for vehicle_class in VSC_RATES.keys()
-                }
-            }
-            for level, info in COVERAGE_DESCRIPTIONS.items()
-        },
+        'coverage_levels': coverage_levels,
         'term_options': {
-            'available_terms': list(TERM_MULTIPLIERS.keys()),
-            'multipliers': TERM_MULTIPLIERS
+            'available_terms': list(term_multipliers.keys()),
+            'multipliers': term_multipliers
         },
         'deductible_options': {
-            'available_deductibles': list(DEDUCTIBLE_MULTIPLIERS.keys()),
-            'multipliers': DEDUCTIBLE_MULTIPLIERS
+            'available_deductibles': list(deductible_multipliers.keys()),
+            'multipliers': deductible_multipliers
         },
         'vehicle_classes': {
             vehicle_class: {
                 'description': f'Class {vehicle_class} vehicles',
                 'example_makes': [
-                    make for make, cls in VEHICLE_CLASSIFICATION.items() 
+                    make for make, cls in classification.items() 
                     if cls == vehicle_class
                 ][:5]  # Show first 5 examples
             }
-            for vehicle_class in VSC_RATES.keys()
+            for vehicle_class in ['A', 'B', 'C']
         }
     }
 
-def calculate_vsc_price(make, year, mileage, coverage_level='gold', term_months=36, 
-                       deductible=100, customer_type='retail'):
+def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str = 'gold', 
+                       term_months: int = 36, deductible: int = 100, customer_type: str = 'retail') -> Dict:
     """
-    Calculate VSC price based on all factors
+    Calculate VSC price based on all factors with exact rate lookup
     
     Args:
-        make (str): Vehicle make
-        year (int): Vehicle year
-        mileage (int): Vehicle mileage
-        coverage_level (str): Coverage level
-        term_months (int): Contract term in months
-        deductible (int): Deductible amount
-        customer_type (str): Customer type (retail/wholesale)
+        make: Vehicle make
+        year: Vehicle year
+        mileage: Vehicle mileage
+        coverage_level: Coverage level
+        term_months: Contract term in months
+        deductible: Deductible amount
+        customer_type: Customer type (retail/wholesale)
         
     Returns:
         dict: Price calculation breakdown
     """
     try:
-        from datetime import datetime
-        
         # Get vehicle class
         vehicle_class = get_vehicle_class(make)
         
-        # Get base rate
-        base_rate = get_base_rate(vehicle_class, coverage_level)
+        # Try to get exact rate from PDF data first
+        exact_rate = rate_manager.get_exact_rate(vehicle_class, coverage_level, term_months, mileage)
         
-        # Calculate multipliers
-        vehicle_age = datetime.now().year - year
-        age_multiplier = get_age_multiplier(vehicle_age)
-        mileage_multiplier = get_mileage_multiplier(mileage)
-        term_multiplier = TERM_MULTIPLIERS.get(term_months, 1.0)
-        deductible_multiplier = DEDUCTIBLE_MULTIPLIERS.get(deductible, 1.0)
-        
-        # Calculate price
-        calculated_price = (base_rate * age_multiplier * mileage_multiplier * 
-                          term_multiplier * deductible_multiplier)
-        
-        # Apply customer discount
-        if customer_type == 'wholesale':
-            calculated_price *= 0.85  # 15% wholesale discount
-        
-        return {
-            'success': True,
-            'vehicle_class': vehicle_class,
-            'base_rate': base_rate,
-            'calculated_price': round(calculated_price, 2),
-            'multipliers': {
-                'age': age_multiplier,
-                'mileage': mileage_multiplier,
-                'term': term_multiplier,
-                'deductible': deductible_multiplier,
-                'customer_discount': 0.85 if customer_type == 'wholesale' else 1.0
+        if exact_rate:
+            # Use exact rate from PDF
+            calculated_price = exact_rate
+            
+            # Apply deductible multiplier
+            deductible_multipliers = rate_manager.get_deductible_multipliers()
+            deductible_multiplier = deductible_multipliers.get(deductible, 1.0)
+            calculated_price *= deductible_multiplier
+            
+            # Apply customer discount
+            customer_discount = 0.85 if customer_type == 'wholesale' else 1.0
+            calculated_price *= customer_discount
+            
+            return {
+                'success': True,
+                'pricing_method': 'exact_pdf_rate',
+                'vehicle_class': vehicle_class,
+                'exact_rate': exact_rate,
+                'calculated_price': round(calculated_price, 2),
+                'multipliers': {
+                    'deductible': deductible_multiplier,
+                    'customer_discount': customer_discount
+                }
             }
-        }
         
+        else:
+            # Fallback to calculated method
+            vehicle_age = datetime.now().year - year
+            
+            # Get base rate
+            base_rate = get_base_rate(vehicle_class, coverage_level)
+            
+            # Calculate multipliers
+            age_multiplier = get_age_multiplier(vehicle_age)
+            mileage_multiplier = get_mileage_multiplier(mileage)
+            
+            term_multipliers = rate_manager.get_term_multipliers()
+            term_multiplier = term_multipliers.get(term_months, 1.0)
+            
+            deductible_multipliers = rate_manager.get_deductible_multipliers()
+            deductible_multiplier = deductible_multipliers.get(deductible, 1.0)
+            
+            # Calculate price
+            calculated_price = (base_rate * age_multiplier * mileage_multiplier * 
+                              term_multiplier * deductible_multiplier)
+            
+            # Apply customer discount
+            customer_discount = 0.85 if customer_type == 'wholesale' else 1.0
+            calculated_price *= customer_discount
+            
+            return {
+                'success': True,
+                'pricing_method': 'calculated',
+                'vehicle_class': vehicle_class,
+                'base_rate': base_rate,
+                'calculated_price': round(calculated_price, 2),
+                'multipliers': {
+                    'age': age_multiplier,
+                    'mileage': mileage_multiplier,
+                    'term': term_multiplier,
+                    'deductible': deductible_multiplier,
+                    'customer_discount': customer_discount
+                }
+            }
+            
     except Exception as e:
+        logger.error(f"Error calculating VSC price: {e}")
         return {
             'success': False,
             'error': str(e)
         }
 
+def __del__():
+    """Clean up database connection on module destruction"""
+    try:
+        rate_manager.close_connection()
+    except:
+        pass

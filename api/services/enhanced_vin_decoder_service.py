@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced VIN Decoder Service with Eligibility Rules
-Handles VIN validation, decoding, and VSC eligibility checking
+Enhanced VIN Decoder Service with Database Integration
+Handles VIN validation, decoding, and VSC eligibility checking using database-driven rules
 """
 
 import re
@@ -9,8 +9,21 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+# Try to import database functions
+try:
+    import sys
+    import os
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.insert(0, parent_dir)
+    
+    from data.vsc_rates_data import get_vehicle_class, rate_manager
+    DATABASE_INTEGRATION = True
+except ImportError:
+    DATABASE_INTEGRATION = False
+
 class EnhancedVINDecoderService:
-    """Enhanced service for VIN validation, decoding, and eligibility checking"""
+    """Enhanced service for VIN validation, decoding, and eligibility checking with database integration"""
     
     def __init__(self):
         self.vin_pattern = re.compile(r'^[A-HJ-NPR-Z0-9]{17}$')
@@ -89,16 +102,47 @@ class EnhancedVINDecoderService:
             '4': 2004, '5': 2005, '6': 2006, '7': 2007, '8': 2008, '9': 2009
         }
         
-        # VSC Eligibility Rules
+        # VSC Eligibility Rules (will be loaded from database if available)
         self.eligibility_rules = {
-            'max_age_years': 15,
-            'max_mileage': 150000,
-            'warning_age_years': 10,
-            'warning_mileage': 125000,
-            'luxury_brands': ['BMW', 'Mercedes-Benz', 'Audi', 'Lexus', 'Cadillac', 'Lincoln', 'Acura', 'Infiniti'],
-            'high_maintenance_brands': ['Land Rover', 'Jaguar', 'Porsche', 'Maserati', 'Bentley', 'Rolls-Royce'],
-            'excluded_vehicle_types': ['motorcycle', 'recreational_vehicle', 'commercial_truck']
+            'max_age_years': 20,        # Changed from 15 to 20
+            'max_mileage': 200000,      # Changed from 150,000 to 200,000
+            'warning_age_years': 15,    # Warning threshold
+            'warning_mileage': 150000,  # Warning threshold
         }
+        
+        # Load database-driven rules if available
+        if DATABASE_INTEGRATION:
+            try:
+                self._load_database_rules()
+            except Exception as e:
+                print(f"Warning: Could not load rules from database, using defaults: {e}")
+        
+        # Brand classifications
+        self.luxury_brands = ['BMW', 'Mercedes-Benz', 'Audi', 'Lexus', 'Cadillac', 'Lincoln', 'Acura', 'Infiniti']
+        self.high_maintenance_brands = ['Land Rover', 'Jaguar', 'Porsche', 'Maserati', 'Bentley', 'Rolls-Royce']
+        self.excluded_vehicle_types = ['motorcycle', 'recreational_vehicle', 'commercial_truck']
+    
+    def _load_database_rules(self):
+        """Load eligibility rules from database if available"""
+        try:
+            if DATABASE_INTEGRATION:
+                # Load multiplier data to understand current rules
+                age_multipliers = rate_manager.get_age_multipliers()
+                mileage_multipliers = rate_manager.get_mileage_multipliers()
+                
+                # Update rules based on database data
+                if age_multipliers:
+                    max_age = max(config['max_age'] for config in age_multipliers)
+                    if max_age < 999:  # Exclude the catch-all category
+                        self.eligibility_rules['max_age_years'] = max_age
+                
+                if mileage_multipliers:
+                    max_mileage = max(config['max_mileage'] for config in mileage_multipliers if config['max_mileage'] < 999999)
+                    if max_mileage:
+                        self.eligibility_rules['max_mileage'] = max_mileage
+                        
+        except Exception as e:
+            print(f"Could not load database rules: {e}")
     
     def validate_vin(self, vin: str) -> Dict:
         """
@@ -141,8 +185,8 @@ class EnhancedVINDecoderService:
         except Exception as e:
             return self._validation_error(f'VIN validation error: {str(e)}')
     
-    def decode_vin(self, vin: str) -> Dict:
-        """Enhanced VIN decoding with eligibility checking"""
+    def decode_vin(self, vin: str, model_year: Optional[int] = None) -> Dict:
+        """Enhanced VIN decoding with database integration"""
         try:
             # First validate the VIN
             validation_result = self.validate_vin(vin)
@@ -157,7 +201,7 @@ class EnhancedVINDecoderService:
             vis = vin[9:]   # Vehicle Identifier Section
             
             # Try external API for detailed information first
-            detailed_info = self._try_external_decode(vin)
+            detailed_info = self._try_external_decode(vin, model_year)
             
             if detailed_info and detailed_info.get('success'):
                 vehicle_info = detailed_info['vehicle_info']
@@ -204,6 +248,14 @@ class EnhancedVINDecoderService:
                 'decode_timestamp': datetime.utcnow().isoformat() + 'Z'
             })
             
+            # Add vehicle class from database if available
+            if DATABASE_INTEGRATION and vehicle_info.get('make'):
+                try:
+                    vehicle_class = get_vehicle_class(vehicle_info['make'])
+                    vehicle_info['vehicle_class'] = vehicle_class
+                except Exception as e:
+                    print(f"Could not get vehicle class from database: {e}")
+            
             return {
                 'success': True,
                 'vehicle_info': vehicle_info,
@@ -221,7 +273,7 @@ class EnhancedVINDecoderService:
     def check_vsc_eligibility(self, vin: str = None, make: str = None, year: int = None, 
                              mileage: int = None, vehicle_info: Dict = None) -> Dict:
         """
-        Check VSC eligibility based on vehicle information
+        Updated VSC eligibility check with database-driven rules
         """
         try:
             # If VIN provided, decode it first
@@ -245,83 +297,83 @@ class EnhancedVINDecoderService:
             current_year = datetime.now().year
             vehicle_age = current_year - year if year else None
             
-            # Initialize eligibility check
+            # Check eligibility with database-driven rules
             eligible = True
             warnings = []
             restrictions = []
-            pricing_factors = {}
             
             # Age eligibility check
             if vehicle_age is not None:
                 if vehicle_age > self.eligibility_rules['max_age_years']:
                     eligible = False
                     restrictions.append(
-                        f"Vehicle is {vehicle_age} years old (maximum {self.eligibility_rules['max_age_years']} years allowed)"
+                        f"Vehicle is {vehicle_age} years old (must be {self.eligibility_rules['max_age_years']} model years or newer)"
                     )
-                elif vehicle_age > self.eligibility_rules['warning_age_years']:
+                elif vehicle_age > self.eligibility_rules.get('warning_age_years', 15):
                     warnings.append(
-                        f"Vehicle is {vehicle_age} years old - limited coverage options and higher rates may apply"
+                        f"Vehicle is {vehicle_age} years old - limited coverage options may apply"
                     )
-                
-                # Age pricing factor
-                if vehicle_age <= 3:
-                    pricing_factors['age_factor'] = 1.0
-                elif vehicle_age <= 6:
-                    pricing_factors['age_factor'] = 1.15
-                elif vehicle_age <= 10:
-                    pricing_factors['age_factor'] = 1.35
-                else:
-                    pricing_factors['age_factor'] = 1.60
             
             # Mileage eligibility check
             if mileage is not None:
-                if mileage > self.eligibility_rules['max_mileage']:
+                if mileage >= self.eligibility_rules['max_mileage']:
                     eligible = False
                     restrictions.append(
-                        f"Vehicle has {mileage:,} miles (maximum {self.eligibility_rules['max_mileage']:,} miles allowed)"
+                        f"Vehicle has {mileage:,} miles (must be less than {self.eligibility_rules['max_mileage']:,} miles)"
                     )
-                elif mileage > self.eligibility_rules['warning_mileage']:
+                elif mileage > self.eligibility_rules.get('warning_mileage', 150000):
                     warnings.append(
-                        f"High mileage vehicle ({mileage:,} miles) - premium rates will apply"
+                        f"High mileage vehicle ({mileage:,} miles) - premium rates may apply"
                     )
-                
-                # Mileage pricing factor
-                if mileage <= 50000:
-                    pricing_factors['mileage_factor'] = 1.0
-                elif mileage <= 75000:
-                    pricing_factors['mileage_factor'] = 1.15
-                elif mileage <= 100000:
-                    pricing_factors['mileage_factor'] = 1.30
-                elif mileage <= 125000:
-                    pricing_factors['mileage_factor'] = 1.50
-                else:
-                    pricing_factors['mileage_factor'] = 1.75
             
-            # Make-based considerations
-            if make:
-                make_upper = make.upper()
-                
-                # Luxury vehicle considerations
-                if any(luxury_brand.upper() in make_upper for luxury_brand in self.eligibility_rules['luxury_brands']):
-                    warnings.append('Luxury vehicle - specialized coverage options and premium rates apply')
-                    pricing_factors['luxury_multiplier'] = 1.25
-                
-                # High maintenance vehicle considerations
-                if any(hm_brand.upper() in make_upper for hm_brand in self.eligibility_rules['high_maintenance_brands']):
-                    warnings.append('High-maintenance vehicle - limited coverage options and significantly higher rates')
-                    pricing_factors['high_maintenance_multiplier'] = 1.50
-                
-                # Vehicle class determination for pricing
-                vehicle_class = self._determine_vehicle_class(make)
-                pricing_factors['vehicle_class'] = vehicle_class
+            # If not eligible, return the specific message
+            if not eligible:
+                return {
+                    'success': True,
+                    'eligible': False,
+                    'message': "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote",
+                    'vehicle_info': vehicle_info,
+                    'eligibility_details': {
+                        'vehicle_age': vehicle_age,
+                        'mileage': mileage,
+                        'make': make,
+                        'year': year
+                    },
+                    'restrictions': restrictions,
+                    'assessment_date': datetime.utcnow().isoformat() + 'Z'
+                }
             
-            # Additional eligibility factors
-            recommendations = self._generate_recommendations(vehicle_info, eligible, warnings)
-            coverage_options = self._get_available_coverage_options(vehicle_info, eligible)
+            # Calculate pricing factors for eligible vehicles
+            pricing_factors = {}
+            
+            # Get database-driven pricing factors if available
+            if DATABASE_INTEGRATION:
+                try:
+                    from data.vsc_rates_data import get_age_multiplier, get_mileage_multiplier
+                    
+                    if vehicle_age is not None:
+                        pricing_factors['age_factor'] = get_age_multiplier(vehicle_age)
+                    
+                    if mileage is not None:
+                        pricing_factors['mileage_factor'] = get_mileage_multiplier(mileage)
+                    
+                    if make:
+                        pricing_factors['vehicle_class'] = get_vehicle_class(make)
+                        
+                except Exception as e:
+                    print(f"Could not get database pricing factors: {e}")
+                    # Fall back to manual calculation
+                    pricing_factors = self._calculate_fallback_pricing_factors(vehicle_age, mileage, make)
+            else:
+                pricing_factors = self._calculate_fallback_pricing_factors(vehicle_age, mileage, make)
+            
+            # Generate recommendations
+            recommendations = self._generate_recommendations_updated(vehicle_info, eligible, warnings)
+            coverage_options = self._get_available_coverage_options_updated(vehicle_info, eligible)
             
             return {
                 'success': True,
-                'eligible': eligible,
+                'eligible': True,
                 'vehicle_info': vehicle_info,
                 'eligibility_details': {
                     'vehicle_age': vehicle_age,
@@ -335,7 +387,7 @@ class EnhancedVINDecoderService:
                 'recommendations': recommendations,
                 'coverage_options': coverage_options,
                 'assessment_date': datetime.utcnow().isoformat() + 'Z',
-                'rules_version': '2025.1'
+                'rules_version': '2025.2_database_integrated'
             }
             
         except Exception as e:
@@ -344,9 +396,44 @@ class EnhancedVINDecoderService:
                 'error': f'Eligibility check error: {str(e)}'
             }
     
+    def _calculate_fallback_pricing_factors(self, vehicle_age, mileage, make):
+        """Calculate pricing factors when database is unavailable"""
+        pricing_factors = {}
+        
+        # Age pricing factor
+        if vehicle_age is not None:
+            if vehicle_age <= 3:
+                pricing_factors['age_factor'] = 1.0
+            elif vehicle_age <= 6:
+                pricing_factors['age_factor'] = 1.15
+            elif vehicle_age <= 10:
+                pricing_factors['age_factor'] = 1.35
+            elif vehicle_age <= 15:
+                pricing_factors['age_factor'] = 1.60
+            else:
+                pricing_factors['age_factor'] = 1.80
+        
+        # Mileage pricing factor
+        if mileage is not None:
+            if mileage <= 50000:
+                pricing_factors['mileage_factor'] = 1.0
+            elif mileage <= 75000:
+                pricing_factors['mileage_factor'] = 1.15
+            elif mileage <= 100000:
+                pricing_factors['mileage_factor'] = 1.30
+            elif mileage <= 150000:
+                pricing_factors['mileage_factor'] = 1.50
+            else:
+                pricing_factors['mileage_factor'] = 1.75
+        
+        # Vehicle class determination for pricing
+        pricing_factors['vehicle_class'] = self._determine_vehicle_class(make) if make else 'B'
+        
+        return pricing_factors
+    
     def get_vin_info_with_eligibility(self, vin: str, mileage: int = None) -> Dict:
         """
-        Get comprehensive VIN information including eligibility check
+        Get comprehensive VIN information including eligibility check with database integration
         """
         try:
             # Decode VIN
@@ -373,6 +460,7 @@ class EnhancedVINDecoderService:
                 'eligibility': eligibility_result,
                 'decode_method': decode_result.get('decode_method'),
                 'validation_details': decode_result.get('validation_details'),
+                'database_integration': DATABASE_INTEGRATION,
                 'timestamp': datetime.utcnow().isoformat() + 'Z'
             }
             
@@ -463,10 +551,6 @@ class EnhancedVINDecoderService:
         if year_char in year_mappings:
             decoded_year = year_mappings[year_char]
             
-            # For your VIN: 1HGBH41JXMN109186
-            # Position 10 is 'N' which should be 2022
-            # But if the car seems too new, it might be from the previous 30-year cycle
-            
             # If decoded year is in the future, subtract 30 years
             if decoded_year > current_year + 1:
                 decoded_year -= 30
@@ -477,19 +561,15 @@ class EnhancedVINDecoderService:
         
         return None
     
-    def _try_external_decode(self, vin: str) -> Optional[Dict]:
+    def _try_external_decode(self, vin: str, model_year: Optional[int] = None) -> Optional[Dict]:
         """
         Attempt to decode VIN using external APIs
-        Priority: NHTSA (free) -> Commercial APIs (if configured)
         """
         try:
             # Try NHTSA VIN Decoder API (free but limited)
-            nhtsa_result = self._try_nhtsa_decode(vin)
+            nhtsa_result = self._try_nhtsa_decode(vin, model_year)
             if nhtsa_result and nhtsa_result.get('success'):
                 return nhtsa_result
-            
-            # Add other API attempts here (AutoCheck, Carfax, etc.)
-            # These would require API keys and paid subscriptions
             
             return None
             
@@ -497,90 +577,251 @@ class EnhancedVINDecoderService:
             print(f"External VIN decode error: {e}")
             return None
     
-    def _try_nhtsa_decode(self, vin: str) -> Optional[Dict]:
-        """Improved NHTSA API decoding with better data extraction"""
+    def _try_nhtsa_decode(self, vin: str, model_year: Optional[int] = None) -> Optional[Dict]:
+        """
+        Improved NHTSA API integration with comprehensive data extraction
+        """
         try:
-            url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/{vin}?format=json"
-            response = requests.get(url, timeout=10)
+            print(f"🔍 Attempting NHTSA decode for VIN: {vin}")
             
-            if response.status_code == 200:
+            url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/{vin}"
+            params = {'format': 'json'}
+            
+            if model_year:
+                params['modelyear'] = model_year
+                print(f"📅 Using model year: {model_year}")
+            
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code != 200:
+                print(f"❌ NHTSA API HTTP error: {response.status_code}")
+                return None
+            
+            try:
                 data = response.json()
-                results = data.get('Results', [])
+            except ValueError as e:
+                print(f"❌ Invalid JSON from NHTSA: {e}")
+                return None
+            
+            results = data.get('Results', [])
+            if not results:
+                print("❌ No results from NHTSA API")
+                return None
+            
+            print(f"✅ NHTSA returned {len(results)} data points")
+            
+            # Enhanced field mapping for better data extraction
+            field_mappings = {
+                'Make': 'make',
+                'Model': 'model',
+                'Model Year': 'year',
+                'Trim': 'trim',
+                'Series': 'series',
+                'Body Class': 'body_style',
+                'Vehicle Type': 'vehicle_type',
+                'Fuel Type - Primary': 'fuel_type',
+                'Engine Number of Cylinders': 'engine_cylinders',
+                'Engine Model': 'engine_model',
+                'Engine Configuration': 'engine_configuration',
+                'Displacement (L)': 'engine_displacement',
+                'Displacement (CI)': 'engine_displacement_ci',
+                'Transmission Style': 'transmission_style',
+                'Transmission Speeds': 'transmission_speeds',
+                'Drive Type': 'drive_type',
+                'Number of Doors': 'doors',
+                'Number of Seats': 'seats',
+                'Plant Country': 'plant_country',
+                'Plant Company Name': 'plant_company',
+                'Plant City': 'plant_city',
+                'Plant State': 'plant_state',
+                'Manufacturer Name': 'manufacturer_name'
+            }
+            
+            vehicle_info = {}
+            
+            # Extract all available information
+            for result in results:
+                variable = result.get('Variable', '')
+                value = result.get('Value', '')
                 
-                if results:
-                    vehicle_info = {}
-                    
-                    # Extract relevant information from NHTSA response
-                    for result in results:
-                        variable = result.get('Variable', '')
-                        value = result.get('Value', '')
-                        
-                        if value and value not in ['Not Applicable', '', 'N/A']:
-                            if variable == 'Make':
-                                vehicle_info['make'] = value
-                            elif variable == 'Model':
-                                vehicle_info['model'] = value
-                            elif variable == 'Model Year':
-                                try:
-                                    vehicle_info['year'] = int(value)
-                                except (ValueError, TypeError):
-                                    pass
-                            elif variable == 'Trim':
-                                vehicle_info['trim'] = value
-                            elif variable == 'Engine Number of Cylinders':
-                                vehicle_info['engine_cylinders'] = value
-                            elif variable == 'Engine Model':
-                                vehicle_info['engine'] = value
-                            elif variable == 'Transmission Style':
-                                vehicle_info['transmission'] = value
-                            elif variable == 'Body Class':
-                                vehicle_info['body_style'] = value
-                            elif variable == 'Fuel Type - Primary':
-                                vehicle_info['fuel_type'] = value
-                            elif variable == 'Vehicle Type':
-                                vehicle_info['vehicle_type'] = value
-                    
-                    # If NHTSA didn't provide year, decode from VIN position 10
-                    if 'year' not in vehicle_info:
-                        decoded_year = self._decode_year(vin[9])
-                        if decoded_year:
-                            vehicle_info['year'] = decoded_year
-                    
-                    # If NHTSA didn't provide make, decode from WMI
-                    if 'make' not in vehicle_info:
-                        vehicle_info['make'] = self._decode_manufacturer(vin[:3])
-                    
-                    # Clean up the model field - sometimes NHTSA returns year as model
-                    if 'model' in vehicle_info and vehicle_info['model'].isdigit():
-                        year_from_model = int(vehicle_info['model'])
-                        if 1980 <= year_from_model <= 2030:
-                            # If model is actually a year, use it and clear model
-                            if 'year' not in vehicle_info:
-                                vehicle_info['year'] = year_from_model
-                            vehicle_info['model'] = 'Model information not available'
-                    
-                    # Add VIN structure info
-                    vehicle_info.update({
-                        'vin': vin,
-                        'wmi': vin[:3],
-                        'vds': vin[3:9],
-                        'vis': vin[9:],
-                        'decode_method': 'nhtsa_api'
-                    })
-                    
-                    return {
-                        'success': True,
-                        'vehicle_info': vehicle_info
-                    }
+                # Skip empty or placeholder values
+                if not value or value in ['Not Applicable', '', 'N/A', 'null']:
+                    continue
+                
+                # Map known fields
+                if variable in field_mappings:
+                    field_name = field_mappings[variable]
+                    cleaned_value = self._clean_nhtsa_value(value)
+                    if cleaned_value is not None:
+                        vehicle_info[field_name] = cleaned_value
             
+            # Post-processing for data consistency
+            vehicle_info = self._post_process_nhtsa_data(vehicle_info, vin)
+            
+            # If we didn't get essential info, try fallback extraction
+            if not vehicle_info.get('make') or not vehicle_info.get('year'):
+                print("⚠️ Missing essential data, trying fallback extraction")
+                fallback_info = self._extract_essential_nhtsa_data(results, vin)
+                vehicle_info.update(fallback_info)
+            
+            # Validate we have minimum required information
+            if not vehicle_info.get('make'):
+                print("❌ No manufacturer information found")
+                return None
+            
+            # Add metadata
+            vehicle_info.update({
+                'vin': vin,
+                'wmi': vin[:3],
+                'vds': vin[3:9],
+                'vis': vin[9:],
+                'decode_method': 'nhtsa_api_enhanced',
+                'decode_timestamp': datetime.utcnow().isoformat() + 'Z',
+                'data_source': 'NHTSA vPIC Database',
+                'api_fields_returned': len([r for r in results if r.get('Value') not in ['Not Applicable', '', 'N/A']])
+            })
+            
+            print(f"✅ Successfully extracted {len(vehicle_info)} fields from NHTSA")
+            return {
+                'success': True,
+                'vehicle_info': vehicle_info
+            }
+            
+        except requests.exceptions.Timeout:
+            print("❌ NHTSA API timeout")
             return None
-            
+        except requests.exceptions.ConnectionError:
+            print("❌ Cannot connect to NHTSA API")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"❌ NHTSA API request error: {e}")
+            return None
         except Exception as e:
-            print(f"NHTSA decode error: {e}")
+            print(f"❌ Unexpected NHTSA decode error: {e}")
             return None
     
+    def _clean_nhtsa_value(self, value: str) -> Optional[str]:
+        """Clean and validate values from NHTSA API"""
+        if not isinstance(value, str):
+            return value
+        
+        value = value.strip()
+        
+        # Handle empty/placeholder values
+        if value in ['Not Applicable', 'N/A', 'null', '', '0']:
+            return None
+        
+        # Clean common formatting issues
+        value = re.sub(r'\s+', ' ', value)  # Multiple spaces to single space
+        
+        # Handle numeric values
+        if value.replace('.', '').replace('-', '').isdigit():
+            try:
+                return int(value) if '.' not in value else float(value)
+            except ValueError:
+                pass
+        
+        return value
+
+    def _post_process_nhtsa_data(self, vehicle_info: Dict, vin: str) -> Dict:
+        """Post-process NHTSA data for consistency"""
+        
+        # Ensure year is properly formatted
+        if 'year' in vehicle_info:
+            try:
+                year_value = vehicle_info['year']
+                if isinstance(year_value, str):
+                    vehicle_info['year'] = int(year_value)
+                elif isinstance(year_value, (int, float)):
+                    vehicle_info['year'] = int(year_value)
+            except (ValueError, TypeError):
+                # If year conversion fails, try to decode from VIN
+                decoded_year = self._decode_year(vin[9])
+                if decoded_year:
+                    vehicle_info['year'] = decoded_year
+        
+        # Standardize make names
+        if 'make' in vehicle_info:
+            make = vehicle_info['make'].strip().title()
+            # Handle common variations
+            make_mappings = {
+                'Mercedes-Benz': 'Mercedes-Benz',
+                'Mercedes Benz': 'Mercedes-Benz', 
+                'Bmw': 'BMW',
+                'Gmc': 'GMC'
+            }
+            vehicle_info['make'] = make_mappings.get(make, make)
+        
+        # Clean up model field
+        if 'model' in vehicle_info and vehicle_info['model'].isdigit():
+            # Sometimes NHTSA returns year as model
+            potential_year = int(vehicle_info['model'])
+            if 1980 <= potential_year <= 2030:
+                if 'year' not in vehicle_info:
+                    vehicle_info['year'] = potential_year
+                vehicle_info['model'] = 'Model not specified'
+        
+        # Calculate vehicle age if year is available
+        if 'year' in vehicle_info:
+            current_year = datetime.now().year
+            vehicle_info['vehicle_age'] = current_year - vehicle_info['year']
+        
+        return vehicle_info
+
+    def _extract_essential_nhtsa_data(self, results: list, vin: str) -> Dict:
+        """Extract essential data when standard mapping fails"""
+        essential_info = {}
+        
+        # Look for make information in multiple fields
+        make_fields = ['Make', 'Manufacturer Name', 'NCSA Make']
+        for result in results:
+            variable = result.get('Variable', '')
+            value = result.get('Value', '')
+            
+            if variable in make_fields and value not in ['Not Applicable', '', 'N/A']:
+                essential_info['make'] = value.strip().title()
+                break
+        
+        # Look for model information
+        model_fields = ['Model', 'NCSA Model', 'Series']
+        for result in results:
+            variable = result.get('Variable', '')
+            value = result.get('Value', '')
+            
+            if variable in model_fields and value not in ['Not Applicable', '', 'N/A']:
+                if not value.isdigit():  # Skip if it's just a year
+                    essential_info['model'] = value.strip().title()
+                    break
+        
+        # Look for year information
+        year_fields = ['Model Year', 'Year']
+        for result in results:
+            variable = result.get('Variable', '')
+            value = result.get('Value', '')
+            
+            if variable in year_fields and value not in ['Not Applicable', '', 'N/A']:
+                try:
+                    year = int(value)
+                    if 1980 <= year <= 2030:
+                        essential_info['year'] = year
+                        break
+                except (ValueError, TypeError):
+                    continue
+        
+        # If still no year, decode from VIN
+        if 'year' not in essential_info:
+            decoded_year = self._decode_year(vin[9])
+            if decoded_year:
+                essential_info['year'] = decoded_year
+        
+        # If still no make, decode from WMI
+        if 'make' not in essential_info:
+            essential_info['make'] = self._decode_manufacturer(vin[:3])
+        
+        return essential_info
+    
     def _determine_vehicle_class(self, make: str) -> str:
-        """Determine vehicle class for pricing (A, B, C)"""
+        """Determine vehicle class for pricing (A, B, C) - fallback method"""
         if not make:
             return 'B'  # Default
         
@@ -605,65 +846,128 @@ class EnhancedVINDecoderService:
         # Class B - Everything else (Medium Rates)
         return 'B'
     
-    def _generate_recommendations(self, vehicle_info: Dict, eligible: bool, warnings: List[str]) -> List[str]:
-        """Generate recommendations based on vehicle characteristics"""
+    def _generate_recommendations_updated(self, vehicle_info: Dict, eligible: bool, warnings: List[str]) -> List[str]:
+        """Generate recommendations based on vehicle characteristics with database integration"""
         recommendations = []
         
         if not eligible:
+            recommendations.append("Please verify your vehicle's current mileage and model year")
             recommendations.append("Consider our Hero Products for alternative protection options")
-            recommendations.append("Look into manufacturer extended warranty programs")
             return recommendations
         
         make = vehicle_info.get('make', '').upper()
         year = vehicle_info.get('year')
         vehicle_age = vehicle_info.get('vehicle_age')
         
-        # Age-based recommendations
-        if vehicle_age and vehicle_age > 8:
-            recommendations.append("Consider Gold or Platinum coverage for comprehensive protection")
-            recommendations.append("Pre-existing condition inspection may be required")
+        # Age-based recommendations with updated thresholds
+        if vehicle_age and vehicle_age > 15:
+            recommendations.append("Platinum coverage recommended for older vehicles")
+            recommendations.append("Consider shorter term options for maximum value")
+        elif vehicle_age and vehicle_age > 10:
+            recommendations.append("Gold or Platinum coverage recommended")
         
         # Luxury vehicle recommendations
-        if any(luxury in make for luxury in ['BMW', 'MERCEDES', 'AUDI', 'LEXUS', 'CADILLAC']):
-            recommendations.append("Platinum coverage recommended for luxury vehicles")
-            recommendations.append("Consider zero deductible option for premium experience")
+        if any(luxury in make for luxury in self.luxury_brands):
+            recommendations.append("Platinum coverage strongly recommended for luxury vehicles")
+            recommendations.append("Consider zero deductible option")
         
         # High-reliability vehicle recommendations
         if any(reliable in make for reliable in ['HONDA', 'TOYOTA', 'MAZDA']):
-            recommendations.append("Silver coverage may provide excellent value for reliable vehicles")
+            recommendations.append("All coverage levels available - Silver may provide excellent value")
         
         # General recommendations
         if not recommendations:
             recommendations.append("Gold coverage offers the best balance of protection and value")
-            recommendations.append("Consider extended term options for maximum savings")
+            recommendations.append("All coverage levels (Silver, Gold, Platinum) available for your vehicle")
         
         return recommendations
     
-    def _get_available_coverage_options(self, vehicle_info: Dict, eligible: bool) -> Dict:
-        """Get available coverage options based on vehicle characteristics"""
+    def _get_available_coverage_options_updated(self, vehicle_info: Dict, eligible: bool) -> Dict:
+        """Get available coverage options based on vehicle characteristics with database integration"""
         if not eligible:
-            return {'available_levels': [], 'message': 'Vehicle not eligible for VSC coverage'}
+            return {
+                'available_levels': [],
+                'message': 'Vehicle not eligible for VSC coverage',
+                'eligibility_requirements': {
+                    'max_age': f'{self.eligibility_rules["max_age_years"]} model years or newer',
+                    'max_mileage': f'Less than {self.eligibility_rules["max_mileage"]:,} miles'
+                }
+            }
         
         make = vehicle_info.get('make', '').upper()
         vehicle_age = vehicle_info.get('vehicle_age', 0)
         
-        # Base coverage options
-        coverage_options = {
-            'available_levels': ['silver', 'gold', 'platinum'],
-            'recommended_level': 'gold',
-            'available_terms': [12, 24, 36, 48, 60, 72],
-            'recommended_term': 36,
-            'available_deductibles': [0, 50, 100, 200, 500, 1000],
-            'recommended_deductible': 100
-        }
+        # Get coverage options from database if available
+        if DATABASE_INTEGRATION:
+            try:
+                from data.vsc_rates_data import get_vsc_coverage_options
+                db_options = get_vsc_coverage_options()
+                
+                coverage_options = {
+                    'available_levels': list(db_options['coverage_levels'].keys()),
+                    'recommended_level': 'gold',
+                    'available_terms': db_options['term_options']['available_terms'],
+                    'recommended_term': 36,
+                    'available_deductibles': db_options['deductible_options']['available_deductibles'],
+                    'recommended_deductible': 100
+                }
+            except Exception as e:
+                print(f"Could not get coverage options from database: {e}")
+                # Fall back to default options
+                coverage_options = self._get_fallback_coverage_options()
+        else:
+            coverage_options = self._get_fallback_coverage_options()
         
-        # Adjust based on vehicle characteristics
-        if vehicle_age > 10:
-            coverage_options['available_terms'] = [12, 24, 36]  # Shorter terms for older vehicles
+        # Adjust recommendations based on vehicle characteristics
+        if vehicle_age > 15:
+            # Shorter terms for older vehicles
+            available_terms = [t for t in coverage_options['available_terms'] if t <= 36]
+            coverage_options['available_terms'] = available_terms if available_terms else [12, 24, 36]
             coverage_options['recommended_term'] = 24
+            coverage_options['recommended_level'] = 'platinum'
         
-        if any(luxury in make for luxury in ['BMW', 'MERCEDES', 'AUDI']):
+        if any(luxury in make for luxury in self.luxury_brands):
             coverage_options['recommended_level'] = 'platinum'
             coverage_options['recommended_deductible'] = 0
         
         return coverage_options
+    
+    def _get_fallback_coverage_options(self):
+        """Fallback coverage options when database is unavailable"""
+        return {
+            'available_levels': ['silver', 'gold', 'platinum'],
+            'recommended_level': 'gold',
+            'available_terms': [12, 24, 36, 48, 60],
+            'recommended_term': 36,
+            'available_deductibles': [0, 50, 100, 200, 500, 1000],
+            'recommended_deductible': 100
+        }
+    
+    def get_database_status(self) -> Dict:
+        """Get status of database integration"""
+        return {
+            'database_integration_enabled': DATABASE_INTEGRATION,
+            'eligibility_rules': self.eligibility_rules,
+            'last_rules_update': datetime.utcnow().isoformat() + 'Z'
+        }
+    
+    def refresh_database_rules(self):
+        """Manually refresh rules from database"""
+        if DATABASE_INTEGRATION:
+            try:
+                self._load_database_rules()
+                return {
+                    'success': True,
+                    'message': 'Database rules refreshed successfully',
+                    'updated_rules': self.eligibility_rules
+                }
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f'Failed to refresh database rules: {str(e)}'
+                }
+        else:
+            return {
+                'success': False,
+                'error': 'Database integration not available'
+            }

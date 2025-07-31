@@ -7,7 +7,7 @@ Complete insurance platform with customer API, admin panel, and user management
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import psycopg2
@@ -187,22 +187,24 @@ user_management_available = False
 # Import customer-facing services with error handling
 try:
     from services.hero_rating_service import HeroRatingService
-    from services.vsc_rating_service import VSCRatingService
+    from services.vsc_rating_service import VSCRatingService  # This now uses database
     from services.vin_decoder_service import VINDecoderService
     from data.hero_products_data import get_hero_products
-    from data.vsc_rates_data import get_vsc_coverage_options
+    from data.vsc_rates_data import get_vsc_coverage_options, calculate_vsc_price, get_vehicle_class  # Updated imports
     from utils.response_helpers import success_response, error_response
     customer_services_available = True
 except ImportError as e:
     customer_services_available = False
     # Create fallback classes to prevent crashes
-
     class HeroRatingService:
         def generate_quote(self, *args, **kwargs):
             return {"success": False, "error": "Service temporarily unavailable"}
 
     class VSCRatingService:
         def generate_quote(self, *args, **kwargs):
+            return {"success": False, "error": "Service temporarily unavailable"}
+        
+        def generate_quote_from_vin(self, *args, **kwargs):
             return {"success": False, "error": "Service temporarily unavailable"}
 
     class VINDecoderService:
@@ -214,6 +216,12 @@ except ImportError as e:
 
     def get_vsc_coverage_options():
         return {}
+    
+    def calculate_vsc_price(*args, **kwargs):
+        return {"success": False, "error": "Service temporarily unavailable"}
+    
+    def get_vehicle_class(make):
+        return 'B'
 
     def success_response(data):
         return {"success": True, "data": data}
@@ -348,6 +356,21 @@ try:
 except ImportError as e:
     print(f"Enhanced VIN service not available: {e}")
     enhanced_vin_available = False
+    # Create fallback
+    class EnhancedVINDecoderService:
+        def decode_vin(self, vin, model_year=None):
+            return {"success": False, "error": "Enhanced VIN service not available"}
+        
+        def validate_vin(self, vin):
+            return {"success": False, "error": "Enhanced VIN service not available"}
+        
+        def check_vsc_eligibility(self, **kwargs):
+            return {"success": False, "error": "Enhanced VIN service not available"}
+        
+        def get_vin_info_with_eligibility(self, vin, mileage=None):
+            return {"success": False, "error": "Enhanced VIN service not available"}
+    
+    enhanced_vin_service = EnhancedVINDecoderService()
 
 # App configuration
 app.config.update(
@@ -697,20 +720,36 @@ def generate_hero_quote():
 
 @app.route('/api/vsc/health')
 def vsc_health():
-    """VSC rating service health check"""
+    """VSC rating service health check with database integration status"""
     if not customer_services_available:
         return jsonify({"error": "VSC rating service not available"}), 503
 
     try:
         coverage_options = get_vsc_coverage_options()
+        
+        # Check database connectivity
+        database_status = "unknown"
+        try:
+            from data.vsc_rates_data import rate_manager
+            test_classification = rate_manager.get_vehicle_classification()
+            database_status = "connected" if test_classification else "unavailable"
+        except Exception as db_error:
+            database_status = f"error: {str(db_error)}"
+        
         return jsonify({
-            "service": "VSC Rating API with VIN Auto-Detection",
+            "service": "VSC Rating API with Database Integration",
             "status": "healthy",
-            "coverage_levels": list(coverage_options.keys()) if coverage_options else [],
+            "database_integration": {
+                "status": database_status,
+                "pdf_rates_available": database_status == "connected",
+                "exact_rate_lookup": database_status == "connected"
+            },
+            "coverage_levels": list(coverage_options.get('coverage_levels', {}).keys()) if coverage_options else [],
             "enhanced_features": {
                 "vin_auto_detection": enhanced_vin_available,
                 "eligibility_checking": enhanced_vin_available,
-                "auto_population": enhanced_vin_available
+                "auto_population": enhanced_vin_available,
+                "database_rates": database_status == "connected"
             },
             "timestamp": datetime.utcnow().isoformat() + "Z"
         })
@@ -733,7 +772,7 @@ def get_vsc_coverage():
 
 @app.route('/api/vsc/quote', methods=['POST'])
 def generate_vsc_quote():
-    """Generate VSC quote based on vehicle information (enhanced with VIN support)"""
+    """Generate VSC quote with database-driven pricing and updated eligibility rules"""
     if not customer_services_available:
         return jsonify({"error": "VSC rating service not available"}), 503
 
@@ -769,50 +808,174 @@ def generate_vsc_quote():
 
         # Validate required fields
         required_fields = ['make', 'year', 'mileage']
-        missing_fields = [
-            field for field in required_fields if field not in data]
+        missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
-        # Ensure proper data types before sending
-        quote_data = {
-            'make': data['make'],
-            'model': data.get('model', ''),
-            'year': int(data['year']),
-            'mileage': int(data['mileage']),
-            'coverage_level': data.get('coverage_level', 'gold'),
-            'term_months': int(data.get('term_months', 36)),
-            'deductible': int(data.get('deductible', 100)),
-            'customer_type': data.get('customer_type', 'retail')
-        }
+        # Ensure proper data types
+        try:
+            make = data['make']
+            model = data.get('model', '')
+            year = int(data['year'])
+            mileage = int(data['mileage'])
+            coverage_level = data.get('coverage_level', 'gold')
+            term_months = int(data.get('term_months', 36))
+            deductible = int(data.get('deductible', 100))
+            customer_type = data.get('customer_type', 'retail')
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": f"Invalid input data: {str(e)}"}), 400
 
-        response = vsc_service.generate_quote(**quote_data)
-        response_data = response if isinstance(
-            response, dict) else response[0] if isinstance(response, list) else response
-
-        if response_data.get('success'):
+        # NEW: Use database-driven calculate_vsc_price function directly
+        try:
+            price_result = calculate_vsc_price(
+                make=make,
+                year=year,
+                mileage=mileage,
+                coverage_level=coverage_level,
+                term_months=term_months,
+                deductible=deductible,
+                customer_type=customer_type
+            )
+            
+            if not price_result.get('success'):
+                return jsonify({"error": price_result.get('error', 'Price calculation failed')}), 400
+            
+            # Check if vehicle is eligible (the new function handles this)
+            vehicle_class = price_result.get('vehicle_class', 'B')
+            calculated_price = price_result.get('calculated_price', 0)
+            pricing_method = price_result.get('pricing_method', 'calculated')
+            
+            # Add administrative fee and tax (if not already included)
+            admin_fee = 50.00
+            tax_rate = 0.07
+            
+            subtotal = calculated_price + admin_fee
+            tax_amount = subtotal * tax_rate
+            total_price = subtotal + tax_amount
+            monthly_payment = total_price / term_months if term_months > 0 else total_price
+            
+            # Generate quote ID
+            quote_id = f"VSC-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            
+            # Build enhanced response
+            enhanced_response = {
+                'success': True,
+                'eligible': True,
+                'quote_id': quote_id,
+                'pricing_method': pricing_method,
+                'database_integration': True,
+                'vehicle_info': {
+                    'make': make.title(),
+                    'model': model.title() if model else 'Not Specified',
+                    'year': year,
+                    'mileage': mileage,
+                    'vehicle_class': vehicle_class,
+                    'age_years': datetime.now().year - year
+                },
+                'coverage_details': {
+                    'level': coverage_level.title(),
+                    'term_months': term_months,
+                    'term_years': round(term_months / 12, 1),
+                    'deductible': deductible,
+                    'customer_type': customer_type
+                },
+                'pricing_breakdown': {
+                    'base_calculation': round(calculated_price, 2),
+                    'admin_fee': round(admin_fee, 2),
+                    'subtotal': round(subtotal, 2),
+                    'tax_amount': round(tax_amount, 2),
+                    'total_price': round(total_price, 2),
+                    'monthly_payment': round(monthly_payment, 2)
+                },
+                'rating_factors': price_result.get('multipliers', {}),
+                'payment_options': {
+                    'full_payment': round(total_price, 2),
+                    'monthly_payment': round(monthly_payment, 2),
+                    'financing_available': True,
+                    'financing_terms': ['12 months 0% APR', '24 months 0% APR']
+                },
+                'quote_details': {
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
+                    'valid_until': (datetime.utcnow() + timedelta(days=30)).isoformat() + 'Z',
+                    'tax_rate': tax_rate,
+                    'currency': 'USD'
+                }
+            }
+            
             # Enhance response with VIN information if available
-            enhanced_response = response_data.copy()
             if vin:
                 enhanced_response['vin_info'] = {
                     'vin': vin,
                     'auto_populated': data.get('auto_populated', False),
                     'vin_decoded': data.get('vin_decoded', {})
                 }
-
+            
             return jsonify(success_response(enhanced_response))
-        else:
-            return jsonify({"error": response_data.get('error', 'VSC quote generation failed')}), 400
+            
+        except Exception as calc_error:
+            # Fallback to legacy VSC service if database calculation fails
+            print(f"Database calculation failed, using fallback: {calc_error}")
+            
+            response = vsc_service.generate_quote(
+                make=make,
+                model=model,
+                year=year,
+                mileage=mileage,
+                coverage_level=coverage_level,
+                term_months=term_months,
+                deductible=deductible,
+                customer_type=customer_type
+            )
 
-    except ValueError as e:
-        return jsonify({"error": f"Invalid input data: {str(e)}"}), 400
+            response_data = response if isinstance(response, dict) else response[0] if isinstance(response, list) else response
+
+            # Handle ineligible vehicles with client's message
+            if not response_data.get('eligible', True):
+                ineligible_response = {
+                    'success': False,
+                    'eligible': False,
+                    'message': response_data.get('message', "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote"),
+                    'vehicle_info': response_data.get('vehicle_info', {}),
+                    'eligibility_details': response_data.get('eligibility_details', {}),
+                    'eligibility_requirements': {
+                        'max_age': '20 model years or newer',
+                        'max_mileage': 'Less than 200,000 miles'
+                    }
+                }
+                
+                if vin:
+                    ineligible_response['vin_info'] = {
+                        'vin': vin,
+                        'auto_populated': data.get('auto_populated', False),
+                        'vin_decoded': data.get('vin_decoded', {})
+                    }
+                
+                return jsonify(ineligible_response), 400
+
+            # Handle successful quotes
+            if response_data.get('success'):
+                # Enhance response with VIN information if available
+                if vin:
+                    response_data['vin_info'] = {
+                        'vin': vin,
+                        'auto_populated': data.get('auto_populated', False),
+                        'vin_decoded': data.get('vin_decoded', {})
+                    }
+                
+                response_data['pricing_method'] = 'fallback_service'
+                response_data['database_integration'] = False
+
+                return jsonify(success_response(response_data))
+            else:
+                return jsonify({"error": response_data.get('error', 'VSC quote generation failed')}), 400
+
     except Exception as e:
         return jsonify({"error": f"VSC quote error: {str(e)}"}), 500
 
 
 @app.route('/api/vsc/eligibility', methods=['POST'])
 def check_vsc_eligibility():
-    """Check VSC eligibility for a vehicle"""
+    """Check VSC eligibility with updated rules (20 years, 200k miles)"""
     try:
         data = request.get_json()
         if not data:
@@ -834,13 +997,11 @@ def check_vsc_eligibility():
 
         if enhanced_vin_available:
             if vin:
-                result = enhanced_vin_service.check_vsc_eligibility(
-                    vin=vin, mileage=mileage)
+                result = enhanced_vin_service.check_vsc_eligibility(vin=vin, mileage=mileage)
             else:
-                result = enhanced_vin_service.check_vsc_eligibility(
-                    make=make, year=year, mileage=mileage)
+                result = enhanced_vin_service.check_vsc_eligibility(make=make, year=year, mileage=mileage)
         else:
-            # Basic eligibility check fallback
+            # Basic eligibility check with updated rules
             current_year = datetime.now().year
             vehicle_age = current_year - year if year else 0
 
@@ -848,28 +1009,58 @@ def check_vsc_eligibility():
             warnings = []
             restrictions = []
 
-            if vehicle_age > 15:
+            # UPDATED: New age limit (20 years instead of 15)
+            if vehicle_age > 20:
                 eligible = False
                 restrictions.append(
-                    f"Vehicle is {vehicle_age} years old (maximum 15 years)")
-            elif vehicle_age > 10:
+                    f"Vehicle is {vehicle_age} years old (must be 20 model years or newer)")
+            elif vehicle_age > 15:
                 warnings.append(
-                    f"Vehicle is {vehicle_age} years old - limited options")
+                    f"Vehicle is {vehicle_age} years old - limited options may apply")
 
-            if mileage and mileage > 150000:
+            # UPDATED: New mileage limit (200k instead of 150k)
+            if mileage and mileage >= 200000:
                 eligible = False
                 restrictions.append(
-                    f"Vehicle has {mileage:,} miles (maximum 150,000)")
-            elif mileage and mileage > 125000:
-                warnings.append(f"High mileage vehicle - premium rates apply")
+                    f"Vehicle has {mileage:,} miles (must be less than 200,000 miles)")
+            elif mileage and mileage > 150000:
+                warnings.append(f"High mileage vehicle - premium rates may apply")
 
-            result = {
-                'success': True,
-                'eligible': eligible,
-                'warnings': warnings,
-                'restrictions': restrictions,
-                'vehicle_info': {'make': make, 'year': year, 'mileage': mileage, 'vehicle_age': vehicle_age}
-            }
+            # Return client's specific message for ineligible vehicles
+            if not eligible:
+                result = {
+                    'success': True,
+                    'eligible': False,
+                    'message': "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote",
+                    'vehicle_info': {
+                        'make': make, 
+                        'year': year, 
+                        'mileage': mileage, 
+                        'vehicle_age': vehicle_age
+                    },
+                    'eligibility_requirements': {
+                        'max_age': '20 model years or newer',
+                        'max_mileage': 'Less than 200,000 miles'
+                    },
+                    'restrictions': restrictions
+                }
+            else:
+                result = {
+                    'success': True,
+                    'eligible': True,
+                    'warnings': warnings,
+                    'restrictions': restrictions,
+                    'vehicle_info': {
+                        'make': make, 
+                        'year': year, 
+                        'mileage': mileage, 
+                        'vehicle_age': vehicle_age
+                    },
+                    'eligibility_requirements': {
+                        'max_age': '20 model years or newer',
+                        'max_mileage': 'Less than 200,000 miles'
+                    }
+                }
 
         if result.get('success'):
             return jsonify(success_response(result))
@@ -882,7 +1073,7 @@ def check_vsc_eligibility():
 
 @app.route('/api/vsc/quote/vin', methods=['POST'])
 def generate_vsc_quote_from_vin():
-    """Generate VSC quote using VIN auto-detection"""
+    """Generate VSC quote using VIN auto-detection with database integration"""
     try:
         data = request.get_json()
         if not data:
@@ -908,67 +1099,198 @@ def generate_vsc_quote_from_vin():
         except (ValueError, TypeError):
             return jsonify(error_response("Invalid numeric values provided")), 400
 
-        # Decode VIN and check eligibility
-        if enhanced_vin_available:
-            vin_result = enhanced_vin_service.get_vin_info_with_eligibility(
-                vin, mileage)
+        # Use the enhanced VIN-based quote method if available
+        if enhanced_vin_available and hasattr(vsc_service, 'generate_quote_from_vin'):
+            quote_result = vsc_service.generate_quote_from_vin(
+                vin=vin,
+                mileage=mileage,
+                coverage_level=coverage_level,
+                term_months=term_months,
+                deductible=deductible,
+                customer_type=customer_type
+            )
+
+            # Handle ineligible vehicles
+            if not quote_result.get('eligible', True):
+                return jsonify(error_response(
+                    quote_result.get('message', 
+                    "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote")
+                )), 400
+
+            if quote_result.get('success'):
+                # Add database integration flag
+                quote_result['database_integration'] = True
+                return jsonify(success_response(quote_result))
+            else:
+                return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
+
+        else:
+            # Fallback method - decode VIN then use database calculation
+            if enhanced_vin_available:
+                vin_result = enhanced_vin_service.decode_vin(vin)
+            else:
+                vin_result = vin_service.decode_vin(vin)
 
             if not vin_result.get('success'):
-                return jsonify(error_response(vin_result.get('error', 'VIN decode failed'))), 400
-
-            vehicle_info = vin_result['vehicle_info']
-            eligibility = vin_result['eligibility']
-
-            if not eligibility.get('eligible'):
-                restrictions = eligibility.get('restrictions', [])
-                return jsonify(error_response(f"Vehicle not eligible: {'; '.join(restrictions)}")), 400
-
-            make = vehicle_info.get('make', '')
-            model = vehicle_info.get('model', '')
-            year = vehicle_info.get('year', 0)
-        else:
-            # Fallback to basic VIN decode
-            decode_result = vin_service.decode_vin(vin)
-            if not decode_result.get('success'):
                 return jsonify(error_response("Failed to decode VIN")), 400
 
-            vehicle_info = decode_result.get('vehicle_info', {})
+            vehicle_info = vin_result.get('vehicle_info', {})
             make = vehicle_info.get('make', '')
             model = vehicle_info.get('model', '')
             year = vehicle_info.get('year', 0)
 
-            # Basic eligibility check
-            current_year = datetime.now().year
-            vehicle_age = current_year - year if year else 0
-            if vehicle_age > 15 or mileage > 150000:
-                return jsonify(error_response("Vehicle not eligible for VSC coverage")), 400
+            # Use database-driven price calculation
+            try:
+                price_result = calculate_vsc_price(
+                    make=make,
+                    year=year,
+                    mileage=mileage,
+                    coverage_level=coverage_level,
+                    term_months=term_months,
+                    deductible=deductible,
+                    customer_type=customer_type
+                )
+                
+                if not price_result.get('success'):
+                    # Check if it's an eligibility issue
+                    error_msg = price_result.get('error', '')
+                    if 'qualify' in error_msg.lower() or 'eligible' in error_msg.lower():
+                        return jsonify(error_response(
+                            "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote"
+                        )), 400
+                    else:
+                        return jsonify(error_response(f"Price calculation failed: {error_msg}")), 400
+                
+                # Build comprehensive quote response
+                admin_fee = 50.00
+                tax_rate = 0.07
+                calculated_price = price_result.get('calculated_price', 0)
+                
+                subtotal = calculated_price + admin_fee
+                tax_amount = subtotal * tax_rate
+                total_price = subtotal + tax_amount
+                monthly_payment = total_price / term_months if term_months > 0 else total_price
+                
+                quote_data = {
+                    'success': True,
+                    'eligible': True,
+                    'quote_id': f"VSC-VIN-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+                    'pricing_method': price_result.get('pricing_method', 'database_calculated'),
+                    'database_integration': True,
+                    'vehicle_info': {
+                        'make': make,
+                        'model': model,
+                        'year': year,
+                        'mileage': mileage,
+                        'vehicle_class': price_result.get('vehicle_class', 'B'),
+                        'age_years': datetime.now().year - year
+                    },
+                    'coverage_details': {
+                        'level': coverage_level.title(),
+                        'term_months': term_months,
+                        'term_years': round(term_months / 12, 1),
+                        'deductible': deductible,
+                        'customer_type': customer_type
+                    },
+                    'pricing_breakdown': {
+                        'base_calculation': round(calculated_price, 2),
+                        'admin_fee': round(admin_fee, 2),
+                        'subtotal': round(subtotal, 2),
+                        'tax_amount': round(tax_amount, 2),
+                        'total_price': round(total_price, 2),
+                        'monthly_payment': round(monthly_payment, 2)
+                    },
+                    'rating_factors': price_result.get('multipliers', {}),
+                    'vin_info': {
+                        'vin': vin,
+                        'vehicle_info': vehicle_info,
+                        'auto_populated': True,
+                        'decode_method': vehicle_info.get('decode_method', 'enhanced')
+                    },
+                    'quote_details': {
+                        'timestamp': datetime.utcnow().isoformat() + 'Z',
+                        'valid_until': (datetime.utcnow() + timedelta(days=30)).isoformat() + 'Z',
+                        'tax_rate': tax_rate,
+                        'currency': 'USD'
+                    }
+                }
 
-        # Generate VSC quote
-        quote_result = vsc_service.generate_quote(
-            make=make, model=model, year=year, mileage=mileage,
-            coverage_level=coverage_level, term_months=term_months,
-            deductible=deductible, customer_type=customer_type
-        )
+                return jsonify(success_response(quote_data))
+                
+            except Exception as db_error:
+                print(f"Database calculation failed for VIN quote: {db_error}")
+                
+                # Final fallback to legacy service
+                quote_result = vsc_service.generate_quote(
+                    make=make, model=model, year=year, mileage=mileage,
+                    coverage_level=coverage_level, term_months=term_months,
+                    deductible=deductible, customer_type=customer_type
+                )
 
-        if quote_result.get('success'):
-            # Enhance quote with VIN information
-            quote_data = quote_result.copy()
-            quote_data['vin_info'] = {
-                'vin': vin,
-                'vehicle_info': vehicle_info,
-                'auto_populated': True,
-                'decode_method': vehicle_info.get('decode_method', 'enhanced')
-            }
+                if quote_result.get('success'):
+                    # Enhance quote with VIN information
+                    quote_result['vin_info'] = {
+                        'vin': vin,
+                        'vehicle_info': vehicle_info,
+                        'auto_populated': True,
+                        'decode_method': vehicle_info.get('decode_method', 'enhanced')
+                    }
+                    quote_result['pricing_method'] = 'fallback_service'
+                    quote_result['database_integration'] = False
 
-            if enhanced_vin_available and 'eligibility' in vin_result:
-                quote_data['eligibility_details'] = eligibility
-
-            return jsonify(success_response(quote_data))
-        else:
-            return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
+                    return jsonify(success_response(quote_result))
+                else:
+                    return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
 
     except Exception as e:
         return jsonify(error_response(f"VIN quote generation error: {str(e)}")), 500
+
+
+@app.route('/api/vsc/database/status', methods=['GET'])
+def get_vsc_database_status():
+    """Get VSC database integration status"""
+    try:
+        status_info = {
+            'database_integration': False,
+            'pdf_rates_loaded': False,
+            'exact_rate_lookup': False,
+            'vehicle_classification_count': 0,
+            'coverage_levels': [],
+            'error': None
+        }
+        
+        try:
+            from data.vsc_rates_data import rate_manager
+            
+            # Test database connectivity
+            vehicle_classification = rate_manager.get_vehicle_classification()
+            coverage_levels = rate_manager.get_coverage_levels()
+            
+            if vehicle_classification and coverage_levels:
+                status_info.update({
+                    'database_integration': True,
+                    'pdf_rates_loaded': True,
+                    'exact_rate_lookup': True,
+                    'vehicle_classification_count': len(vehicle_classification),
+                    'coverage_levels': list(coverage_levels.keys()),
+                    'sample_rates_available': True
+                })
+                
+                # Test exact rate lookup
+                try:
+                    test_rate = rate_manager.get_exact_rate('A', 'gold', 36, 50000)
+                    status_info['sample_exact_rate'] = test_rate
+                except Exception as rate_error:
+                    status_info['exact_rate_lookup'] = False
+                    status_info['rate_lookup_error'] = str(rate_error)
+            
+        except Exception as db_error:
+            status_info['error'] = f"Database connection failed: {str(db_error)}"
+        
+        return jsonify(success_response(status_info))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Status check failed: {str(e)}")), 500
 
 # VIN Decoder API
 
@@ -1022,10 +1344,91 @@ def validate_vin():
     except Exception as e:
         return jsonify({"error": f"VIN validation error: {str(e)}"}), 500
 
+@app.route('/api/vsc/eligibility/requirements', methods=['GET'])
+def get_vsc_eligibility_requirements():
+    """Get current VSC eligibility requirements"""
+    return jsonify(success_response({
+        'eligibility_requirements': {
+            'max_vehicle_age': '20 model years or newer',
+            'max_mileage': 'Less than 200,000 miles',
+            'message_for_ineligible': "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote"
+        },
+        'coverage_levels': ['silver', 'gold', 'platinum'],
+        'available_terms': [12, 24, 36, 48, 60],
+        'available_deductibles': [0, 50, 100, 200, 500, 1000],
+        'updated': datetime.utcnow().isoformat() + 'Z'
+    }))
+    
+
+@app.route('/api/vsc/eligibility/test', methods=['POST'])
+def test_vsc_eligibility():
+    """Test VSC eligibility with different vehicle scenarios"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify(error_response("Test data is required")), 400
+
+        test_scenarios = data.get('scenarios', [data])  # Allow single scenario or multiple
+        results = []
+
+        for scenario in test_scenarios:
+            make = scenario.get('make', 'Honda')
+            year = scenario.get('year', 2020)
+            mileage = scenario.get('mileage', 50000)
+            
+            try:
+                year = int(year)
+                mileage = int(mileage)
+            except (ValueError, TypeError):
+                results.append({
+                    'scenario': scenario,
+                    'error': 'Invalid year or mileage values'
+                })
+                continue
+
+            current_year = datetime.now().year
+            vehicle_age = current_year - year
+
+            # Apply updated eligibility rules
+            eligible = True
+            issues = []
+
+            if vehicle_age > 20:
+                eligible = False
+                issues.append(f"Vehicle is {vehicle_age} years old (must be 20 model years or newer)")
+
+            if mileage >= 200000:
+                eligible = False
+                issues.append(f"Vehicle has {mileage:,} miles (must be less than 200,000 miles)")
+
+            result = {
+                'scenario': {
+                    'make': make,
+                    'year': year,
+                    'mileage': mileage,
+                    'vehicle_age': vehicle_age
+                },
+                'eligible': eligible,
+                'issues': issues if not eligible else [],
+                'message': "Vehicle qualifies for VSC coverage" if eligible else "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote"
+            }
+            
+            results.append(result)
+
+        return jsonify(success_response({
+            'test_results': results,
+            'total_scenarios': len(results),
+            'eligible_count': len([r for r in results if r.get('eligible')]),
+            'ineligible_count': len([r for r in results if not r.get('eligible')])
+        }))
+
+    except Exception as e:
+        return jsonify(error_response(f"Eligibility test error: {str(e)}")), 500
+
 
 @app.route('/api/vin/decode', methods=['POST'])
 def decode_vin():
-    """Decode VIN to extract vehicle information (enhanced version)"""
+    """Enhanced VIN decoding with improved NHTSA integration"""
     try:
         data = request.get_json()
         if not data or 'vin' not in data:
@@ -1034,17 +1437,22 @@ def decode_vin():
         vin = data['vin'].strip().upper()
         include_eligibility = data.get('include_eligibility', True)
         mileage = data.get('mileage', 0)
+        model_year = data.get('model_year')  # NEW: Accept model_year for better NHTSA accuracy
 
         # Validate VIN first
         if len(vin) != 17:
             return jsonify({"error": "Invalid VIN length"}), 400
 
+        print(f"🔍 Decoding VIN: {vin}")
+        if model_year:
+            print(f"📅 Using model year: {model_year}")
+
         # Use enhanced service if available
         if enhanced_vin_available and include_eligibility:
-            result = enhanced_vin_service.get_vin_info_with_eligibility(
-                vin, mileage)
+            result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
         elif enhanced_vin_available:
-            result = enhanced_vin_service.decode_vin(vin)
+            # UPDATED: Pass model_year to enhanced service
+            result = enhanced_vin_service.decode_vin(vin, model_year)
         else:
             # Fallback to basic service
             if not customer_services_available:
@@ -1052,11 +1460,21 @@ def decode_vin():
             result = vin_service.decode_vin(vin)
 
         if result.get('success'):
+            # Add NHTSA-specific metadata if available
+            if result.get('vehicle_info', {}).get('decode_method') == 'nhtsa_api_enhanced':
+                result['nhtsa_integration'] = {
+                    'api_used': True,
+                    'data_source': 'NHTSA vPIC Database',
+                    'api_fields_returned': result.get('vehicle_info', {}).get('api_fields_returned', 0),
+                    'model_year_provided': model_year is not None
+                }
+            
             return jsonify(success_response(result))
         else:
             return jsonify({"error": result.get('error', 'VIN decode failed')}), 400
 
     except Exception as e:
+        print(f"❌ VIN decode error: {str(e)}")
         return jsonify({"error": f"VIN decode error: {str(e)}"}), 500
 
 
@@ -1095,10 +1513,11 @@ def enhanced_decode_vin():
 
         vin = data['vin'].strip().upper()
         mileage = data.get('mileage', 0)
+        model_year = data.get('model_year')  # NEW: Accept model_year
 
         if enhanced_vin_available:
-            result = enhanced_vin_service.get_vin_info_with_eligibility(
-                vin, mileage)
+            # UPDATED: Pass model_year to enhanced service
+            result = enhanced_vin_service.get_vin_info_with_eligibility(vin, mileage)
         else:
             # Fallback to basic decoding
             result = vin_service.decode_vin(vin)
@@ -3289,6 +3708,1707 @@ def get_current_landing_video():
             'updated_at': datetime.utcnow().isoformat() + 'Z'
         }))
 
+@app.route('/api/vin/decode/batch', methods=['POST'])
+def decode_vins_batch():
+    """Batch VIN decoding using NHTSA API (max 50 VINs)"""
+    try:
+        data = request.get_json()
+        if not data or 'vins' not in data:
+            return jsonify({"error": "VINs array is required"}), 400
+
+        vins_data = data['vins']
+        if not isinstance(vins_data, list):
+            return jsonify({"error": "VINs must be an array"}), 400
+
+        if len(vins_data) > 50:
+            return jsonify({"error": "Maximum 50 VINs allowed per batch"}), 400
+
+        print(f"🔍 Batch decoding {len(vins_data)} VINs")
+
+        # Process VINs - can be strings or objects with vin/model_year
+        processed_vins = []
+        for item in vins_data:
+            if isinstance(item, str):
+                processed_vins.append({'vin': item.strip().upper(), 'model_year': None})
+            elif isinstance(item, dict) and 'vin' in item:
+                processed_vins.append({
+                    'vin': item['vin'].strip().upper(),
+                    'model_year': item.get('model_year')
+                })
+            else:
+                return jsonify({"error": "Invalid VIN format in batch"}), 400
+
+        # Validate all VINs
+        for item in processed_vins:
+            if len(item['vin']) != 17:
+                return jsonify({"error": f"Invalid VIN length: {item['vin']}"}), 400
+
+        # Process each VIN
+        results = []
+        for item in processed_vins:
+            vin = item['vin']
+            model_year = item['model_year']
+            
+            if enhanced_vin_available:
+                result = enhanced_vin_service.decode_vin(vin, model_year)
+            else:
+                result = vin_service.decode_vin(vin)
+            
+            if result.get('success'):
+                results.append({
+                    'vin': vin,
+                    'success': True,
+                    'vehicle_info': result['vehicle_info']
+                })
+            else:
+                results.append({
+                    'vin': vin,
+                    'success': False,
+                    'error': result.get('error', 'Decode failed')
+                })
+
+        return jsonify(success_response({
+            'batch_results': results,
+            'total_processed': len(results),
+            'successful_decodes': len([r for r in results if r['success']]),
+            'decode_method': 'enhanced_with_nhtsa'
+        }))
+
+    except Exception as e:
+        print(f"❌ Batch VIN decode error: {str(e)}")
+        return jsonify({"error": f"Batch decode error: {str(e)}"}), 500
+    
+
+@app.route('/api/vin/test', methods=['POST'])
+def test_vin_decode():
+    """Test endpoint for VIN decoding with detailed debugging"""
+    try:
+        data = request.get_json()
+        if not data or 'vin' not in data:
+            return jsonify({"error": "VIN is required"}), 400
+
+        vin = data['vin'].strip().upper()
+        model_year = data.get('model_year')
+        debug_mode = data.get('debug', False)
+
+        print(f"🧪 Testing VIN: {vin}")
+
+        results = {
+            'vin': vin,
+            'test_results': {},
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
+
+        # Test NHTSA API directly
+        try:
+            print("🌐 Testing NHTSA API...")
+            import requests
+            
+            url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/{vin}"
+            params = {'format': 'json'}
+            if model_year:
+                params['modelyear'] = model_year
+
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                nhtsa_data = response.json()
+                nhtsa_results = nhtsa_data.get('Results', [])
+                
+                # Extract key fields
+                key_info = {}
+                for result in nhtsa_results:
+                    variable = result.get('Variable', '')
+                    value = result.get('Value', '')
+                    
+                    if variable in ['Make', 'Model', 'Model Year', 'Body Class'] and value not in ['Not Applicable', '', 'N/A']:
+                        key_info[variable] = value
+
+                results['test_results']['nhtsa_api'] = {
+                    'status': 'success',
+                    'response_code': 200,
+                    'fields_returned': len(nhtsa_results),
+                    'key_info': key_info,
+                    'url_used': url
+                }
+                    
+            else:
+                results['test_results']['nhtsa_api'] = {
+                    'status': 'failed',
+                    'response_code': response.status_code,
+                    'error': f"HTTP {response.status_code}"
+                }
+                
+        except Exception as nhtsa_error:
+            results['test_results']['nhtsa_api'] = {
+                'status': 'error',
+                'error': str(nhtsa_error)
+            }
+
+        # Test enhanced VIN service
+        if enhanced_vin_available:
+            try:
+                print("🔧 Testing Enhanced VIN Service...")
+                enhanced_result = enhanced_vin_service.decode_vin(vin, model_year)
+                
+                results['test_results']['enhanced_service'] = {
+                    'status': 'success' if enhanced_result.get('success') else 'failed',
+                    'decode_method': enhanced_result.get('vehicle_info', {}).get('decode_method'),
+                    'fields_extracted': len(enhanced_result.get('vehicle_info', {})),
+                    'vehicle_info': {
+                        'make': enhanced_result.get('vehicle_info', {}).get('make'),
+                        'model': enhanced_result.get('vehicle_info', {}).get('model'),
+                        'year': enhanced_result.get('vehicle_info', {}).get('year')
+                    } if enhanced_result.get('success') else None,
+                    'error': enhanced_result.get('error') if not enhanced_result.get('success') else None
+                }
+                
+            except Exception as enhanced_error:
+                results['test_results']['enhanced_service'] = {
+                    'status': 'error',
+                    'error': str(enhanced_error)
+                }
+        else:
+            results['test_results']['enhanced_service'] = {
+                'status': 'unavailable',
+                'message': 'Enhanced VIN service not loaded'
+            }
+
+        return jsonify(success_response(results))
+
+    except Exception as e:
+        return jsonify({"error": f"Test error: {str(e)}"}), 500
+
+
+# ================================
+# VSC USER-FACING DATA ENDPOINTS
+# ================================
+
+@app.route('/api/vsc/rates', methods=['GET'])
+def get_vsc_rates():
+    """Get VSC rates for public consumption (filtered for frontend)"""
+    try:
+        vehicle_class = request.args.get('vehicle_class')
+        coverage_level = request.args.get('coverage_level')
+        term_months = request.args.get('term_months', type=int)
+        mileage = request.args.get('mileage', type=int)
+        
+        from data.vsc_rates_data import rate_manager
+        
+        # If specific parameters provided, get targeted rates
+        if all([vehicle_class, coverage_level, term_months, mileage]):
+            exact_rate = rate_manager.get_exact_rate(vehicle_class, coverage_level, term_months, mileage)
+            if exact_rate:
+                return jsonify(success_response({
+                    'rate': exact_rate,
+                    'vehicle_class': vehicle_class,
+                    'coverage_level': coverage_level,
+                    'term_months': term_months,
+                    'mileage_range': f"Applicable for {mileage:,} miles"
+                }))
+        
+        # Get all available options for frontend
+        coverage_options = get_vsc_coverage_options()
+        
+        return jsonify(success_response({
+            'coverage_levels': coverage_options.get('coverage_levels', {}),
+            'term_options': coverage_options.get('term_options', {}),
+            'deductible_options': coverage_options.get('deductible_options', {}),
+            'vehicle_classes': coverage_options.get('vehicle_classes', {}),
+            'data_source': 'database'
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get VSC rates: {str(e)}")), 500
+
+
+@app.route('/api/vsc/vehicle-classes', methods=['GET'])
+def get_vsc_vehicle_classes():
+    """Get vehicle classification data"""
+    try:
+        from data.vsc_rates_data import rate_manager
+        
+        classification = rate_manager.get_vehicle_classification()
+        
+        # Organize by class
+        classes = {'A': [], 'B': [], 'C': []}
+        for make, vehicle_class in classification.items():
+            if vehicle_class in classes:
+                classes[vehicle_class].append(make.title())
+        
+        return jsonify(success_response({
+            'vehicle_classes': {
+                'A': {
+                    'name': 'Class A - Most Reliable',
+                    'description': 'Lowest rates - typically Japanese and Korean brands',
+                    'makes': sorted(classes['A'])
+                },
+                'B': {
+                    'name': 'Class B - Moderate Risk', 
+                    'description': 'Medium rates - typically American brands',
+                    'makes': sorted(classes['B'])
+                },
+                'C': {
+                    'name': 'Class C - Higher Risk',
+                    'description': 'Highest rates - typically luxury and European brands', 
+                    'makes': sorted(classes['C'])
+                }
+            },
+            'total_makes': len(classification)
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get vehicle classes: {str(e)}")), 500
+
+
+@app.route('/api/vsc/multipliers', methods=['GET'])
+def get_vsc_multipliers():
+    """Get all VSC pricing multipliers"""
+    try:
+        from data.vsc_rates_data import rate_manager
+        
+        multipliers = {
+            'term_multipliers': rate_manager.get_term_multipliers(),
+            'deductible_multipliers': rate_manager.get_deductible_multipliers(), 
+            'mileage_multipliers': rate_manager.get_mileage_multipliers(),
+            'age_multipliers': rate_manager.get_age_multipliers()
+        }
+        
+        return jsonify(success_response(multipliers))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get multipliers: {str(e)}")), 500
+
+
+@app.route('/api/vsc/coverage/<coverage_level>', methods=['GET'])
+def get_vsc_coverage_details(coverage_level):
+    """Get detailed information about a specific coverage level"""
+    try:
+        from data.vsc_rates_data import rate_manager
+        
+        coverage_levels = rate_manager.get_coverage_levels()
+        
+        if coverage_level not in coverage_levels:
+            return jsonify(error_response(f"Coverage level '{coverage_level}' not found")), 404
+        
+        coverage_info = coverage_levels[coverage_level]
+        
+        # Get sample rates for this coverage level
+        sample_rates = {}
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT vehicle_class, term_months, mileage_range_key, rate_amount
+                FROM vsc_rate_matrix 
+                WHERE coverage_level = %s 
+                AND active = TRUE
+                ORDER BY vehicle_class, term_months, min_mileage
+                LIMIT 20;
+            ''', (coverage_level,))
+            
+            rates_data = cursor.fetchall()
+            for vehicle_class, term_months, mileage_key, rate_amount in rates_data:
+                if vehicle_class not in sample_rates:
+                    sample_rates[vehicle_class] = {}
+                if term_months not in sample_rates[vehicle_class]:
+                    sample_rates[vehicle_class][term_months] = {}
+                sample_rates[vehicle_class][term_months][mileage_key] = float(rate_amount)
+            
+            cursor.close()
+            conn.close()
+            
+        except Exception as rate_error:
+            print(f"Could not get sample rates: {rate_error}")
+        
+        return jsonify(success_response({
+            'coverage_level': coverage_level,
+            'details': coverage_info,
+            'sample_rates': sample_rates
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get coverage details: {str(e)}")), 500
+
+
+@app.route('/api/vsc/rate-lookup', methods=['POST'])
+def lookup_vsc_rate():
+    """Look up specific VSC rate"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['vehicle_class', 'coverage_level', 'term_months', 'mileage']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+        
+        from data.vsc_rates_data import rate_manager
+        
+        exact_rate = rate_manager.get_exact_rate(
+            data['vehicle_class'],
+            data['coverage_level'], 
+            data['term_months'],
+            data['mileage']
+        )
+        
+        if exact_rate:
+            return jsonify(success_response({
+                'rate_found': True,
+                'rate_amount': exact_rate,
+                'lookup_criteria': data,
+                'rate_type': 'exact_pdf_rate'
+            }))
+        else:
+            # Try to get base rate and calculate
+            base_rate = rate_manager.get_base_rate(data['vehicle_class'], data['coverage_level'])
+            
+            return jsonify(success_response({
+                'rate_found': False,
+                'base_rate': base_rate,
+                'lookup_criteria': data,
+                'rate_type': 'calculated_fallback',
+                'message': 'Exact rate not found, base rate provided'
+            }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Rate lookup failed: {str(e)}")), 500
+
+
+
+# ================================
+# VSC ADMIN CRUD ENDPOINTS
+# ================================
+
+@app.route('/api/admin/vsc/rates', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_all_vsc_rates():
+    """Get all VSC rates for admin management"""
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        vehicle_class = request.args.get('vehicle_class')
+        coverage_level = request.args.get('coverage_level')
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Build WHERE clause
+        where_conditions = ['active = TRUE']
+        params = []
+        
+        if vehicle_class:
+            where_conditions.append('vehicle_class = %s')
+            params.append(vehicle_class)
+            
+        if coverage_level:
+            where_conditions.append('coverage_level = %s')
+            params.append(coverage_level)
+        
+        where_clause = ' AND '.join(where_conditions)
+        
+        # Get total count
+        cursor.execute(f'''
+            SELECT COUNT(*) 
+            FROM vsc_rate_matrix 
+            WHERE {where_clause};
+        ''', params)
+        total_count = cursor.fetchone()['count']
+        
+        # Get paginated results
+        offset = (page - 1) * per_page
+        cursor.execute(f'''
+            SELECT id, vehicle_class, coverage_level, term_months,
+                   mileage_range_key, min_mileage, max_mileage, rate_amount,
+                   effective_date, created_at, updated_at
+            FROM vsc_rate_matrix 
+            WHERE {where_clause}
+            ORDER BY vehicle_class, coverage_level, term_months, min_mileage
+            LIMIT %s OFFSET %s;
+        ''', params + [per_page, offset])
+        
+        rates = cursor.fetchall()
+        
+        # Convert to proper format
+        rates_list = []
+        for rate in rates:
+            rate_dict = dict(rate)
+            rate_dict['rate_amount'] = float(rate_dict['rate_amount'])
+            rate_dict['effective_date'] = rate_dict['effective_date'].isoformat() if rate_dict['effective_date'] else None
+            rate_dict['created_at'] = rate_dict['created_at'].isoformat() if rate_dict['created_at'] else None
+            rate_dict['updated_at'] = rate_dict['updated_at'].isoformat() if rate_dict['updated_at'] else None
+            rates_list.append(rate_dict)
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'rates': rates_list,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total_count,
+                'pages': (total_count + per_page - 1) // per_page
+            },
+            'filters': {
+                'vehicle_class': vehicle_class,
+                'coverage_level': coverage_level
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get VSC rates: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/rates/<int:rate_id>', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_vsc_rate(rate_id):
+    """Get specific VSC rate by ID"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute('''
+            SELECT * FROM vsc_rate_matrix WHERE id = %s;
+        ''', (rate_id,))
+        
+        rate = cursor.fetchone()
+        if not rate:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Rate not found')), 404
+        
+        rate_dict = dict(rate)
+        rate_dict['rate_amount'] = float(rate_dict['rate_amount'])
+        rate_dict['effective_date'] = rate_dict['effective_date'].isoformat() if rate_dict['effective_date'] else None
+        rate_dict['created_at'] = rate_dict['created_at'].isoformat() if rate_dict['created_at'] else None
+        rate_dict['updated_at'] = rate_dict['updated_at'].isoformat() if rate_dict['updated_at'] else None
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({'rate': rate_dict}))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get rate: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/rates', methods=['POST'])
+@token_required
+@role_required('admin')
+def create_vsc_rate():
+    """Create new VSC rate"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['vehicle_class', 'coverage_level', 'term_months', 
+                          'mileage_range_key', 'min_mileage', 'max_mileage', 'rate_amount']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check for duplicate
+        cursor.execute('''
+            SELECT id FROM vsc_rate_matrix 
+            WHERE vehicle_class = %s AND coverage_level = %s 
+            AND term_months = %s AND mileage_range_key = %s 
+            AND effective_date = CURRENT_DATE;
+        ''', (data['vehicle_class'], data['coverage_level'], 
+              data['term_months'], data['mileage_range_key']))
+        
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Rate already exists for this combination')), 409
+        
+        # Insert new rate
+        cursor.execute('''
+            INSERT INTO vsc_rate_matrix 
+            (vehicle_class, coverage_level, term_months, mileage_range_key,
+             min_mileage, max_mileage, rate_amount, effective_date, active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, created_at;
+        ''', (
+            data['vehicle_class'], data['coverage_level'], data['term_months'],
+            data['mileage_range_key'], data['min_mileage'], data['max_mileage'],
+            data['rate_amount'], data.get('effective_date', 'CURRENT_DATE'),
+            data.get('active', True)
+        ))
+        
+        rate_id, created_at = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': 'VSC rate created successfully',
+            'rate': {
+                'id': rate_id,
+                'created_at': created_at.isoformat(),
+                **data
+            }
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create rate: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/rates/<int:rate_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_vsc_rate(rate_id):
+    """Update existing VSC rate"""
+    try:
+        data = request.get_json()
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if rate exists
+        cursor.execute('SELECT id FROM vsc_rate_matrix WHERE id = %s;', (rate_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Rate not found')), 404
+        
+        # Build dynamic UPDATE query
+        update_fields = []
+        params = []
+        
+        allowed_fields = ['vehicle_class', 'coverage_level', 'term_months', 
+                         'mileage_range_key', 'min_mileage', 'max_mileage', 
+                         'rate_amount', 'effective_date', 'active']
+        
+        for field in allowed_fields:
+            if field in data:
+                update_fields.append(f"{field} = %s")
+                params.append(data[field])
+        
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+        
+        # Add updated_at and rate_id
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(rate_id)
+        
+        query = f"UPDATE vsc_rate_matrix SET {', '.join(update_fields)} WHERE id = %s RETURNING updated_at;"
+        cursor.execute(query, params)
+        
+        updated_at = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'VSC rate {rate_id} updated successfully',
+            'rate': {
+                'id': rate_id,
+                'updated_at': updated_at.isoformat(),
+                **data
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update rate: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/rates/<int:rate_id>', methods=['DELETE'])
+@token_required
+@role_required('admin')
+def delete_vsc_rate(rate_id):
+    """Delete VSC rate (soft delete by setting active = false)"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if rate exists
+        cursor.execute('''
+            SELECT vehicle_class, coverage_level, term_months, mileage_range_key
+            FROM vsc_rate_matrix WHERE id = %s;
+        ''', (rate_id,))
+        
+        rate = cursor.fetchone()
+        if not rate:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Rate not found')), 404
+        
+        # Soft delete (set active = false)
+        cursor.execute('''
+            UPDATE vsc_rate_matrix 
+            SET active = FALSE, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = %s;
+        ''', (rate_id,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'VSC rate {rate_id} deleted successfully',
+            'deleted_rate': {
+                'id': rate_id,
+                'vehicle_class': rate[0],
+                'coverage_level': rate[1], 
+                'term_months': rate[2],
+                'mileage_range_key': rate[3]
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to delete rate: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/rates/bulk', methods=['POST'])
+@token_required
+@role_required('admin')
+def bulk_import_vsc_rates():
+    """Bulk import VSC rates from CSV or JSON data"""
+    try:
+        data = request.get_json()
+        
+        if 'rates' not in data or not isinstance(data['rates'], list):
+            return jsonify(error_response('rates array is required')), 400
+        
+        rates_data = data['rates']
+        if len(rates_data) > 1000:
+            return jsonify(error_response('Maximum 1000 rates per bulk import')), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Validate all rates first
+        required_fields = ['vehicle_class', 'coverage_level', 'term_months', 
+                          'mileage_range_key', 'min_mileage', 'max_mileage', 'rate_amount']
+        
+        for i, rate in enumerate(rates_data):
+            missing_fields = [field for field in required_fields if field not in rate]
+            if missing_fields:
+                cursor.close()
+                conn.close()
+                return jsonify(error_response(f"Rate {i+1}: Missing fields: {', '.join(missing_fields)}")), 400
+        
+        # Prepare bulk insert data
+        insert_data = []
+        for rate in rates_data:
+            insert_data.append((
+                rate['vehicle_class'], rate['coverage_level'], rate['term_months'],
+                rate['mileage_range_key'], rate['min_mileage'], rate['max_mileage'],
+                rate['rate_amount'], rate.get('effective_date', 'CURRENT_DATE'),
+                rate.get('active', True)
+            ))
+        
+        # Bulk insert with conflict handling
+        from psycopg2.extras import execute_values
+        
+        execute_values(cursor, '''
+            INSERT INTO vsc_rate_matrix 
+            (vehicle_class, coverage_level, term_months, mileage_range_key,
+             min_mileage, max_mileage, rate_amount, effective_date, active)
+            VALUES %s
+            ON CONFLICT (vehicle_class, coverage_level, term_months, mileage_range_key, effective_date)
+            DO UPDATE SET 
+                rate_amount = EXCLUDED.rate_amount,
+                updated_at = CURRENT_TIMESTAMP;
+        ''', insert_data)
+        
+        imported_count = cursor.rowcount
+        conn.commit()
+        cursor.close() 
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Bulk import completed: {imported_count} rates processed',
+            'imported_count': imported_count,
+            'total_submitted': len(rates_data)
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Bulk import failed: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/vehicle-classes', methods=['GET'])
+@token_required  
+@role_required('admin')
+def get_admin_vehicle_classes():
+    """Get all vehicle classifications for admin management"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute('''
+            SELECT id, make_name, vehicle_class, active, created_at, updated_at
+            FROM vsc_vehicle_classes 
+            ORDER BY vehicle_class, make_name;
+        ''')
+        
+        classifications = cursor.fetchall()
+        
+        # Convert to proper format
+        classifications_list = []
+        for classification in classifications:
+            class_dict = dict(classification)
+            class_dict['created_at'] = class_dict['created_at'].isoformat() if class_dict['created_at'] else None
+            class_dict['updated_at'] = class_dict['updated_at'].isoformat() if class_dict['updated_at'] else None
+            classifications_list.append(class_dict)
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'vehicle_classifications': classifications_list,
+            'total': len(classifications_list)
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get vehicle classes: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/vehicle-classes', methods=['POST'])
+@token_required
+@role_required('admin') 
+def create_vehicle_classification():
+    """Create new vehicle classification"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['make_name', 'vehicle_class']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+        
+        if data['vehicle_class'] not in ['A', 'B', 'C']:
+            return jsonify(error_response('vehicle_class must be A, B, or C')), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check for duplicate
+        cursor.execute('''
+            SELECT id FROM vsc_vehicle_classes WHERE make_name = %s;
+        ''', (data['make_name'],))
+        
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Vehicle make already classified')), 409
+        
+        # Insert new classification
+        cursor.execute('''
+            INSERT INTO vsc_vehicle_classes (make_name, vehicle_class, active)
+            VALUES (%s, %s, %s)
+            RETURNING id, created_at;
+        ''', (data['make_name'], data['vehicle_class'], data.get('active', True)))
+        
+        class_id, created_at = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': 'Vehicle classification created successfully',
+            'classification': {
+                'id': class_id,
+                'created_at': created_at.isoformat(),
+                **data
+            }
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create classification: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/vehicle-classes/<int:class_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_vehicle_classification(class_id):
+    """Update vehicle classification"""
+    try:
+        data = request.get_json()
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if classification exists
+        cursor.execute('SELECT id FROM vsc_vehicle_classes WHERE id = %s;', (class_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Classification not found')), 404
+        
+        # Build update query
+        update_fields = []
+        params = []
+        
+        allowed_fields = ['make_name', 'vehicle_class', 'active']
+        
+        for field in allowed_fields:
+            if field in data:
+                if field == 'vehicle_class' and data[field] not in ['A', 'B', 'C']:
+                    cursor.close()
+                    conn.close()
+                    return jsonify(error_response('vehicle_class must be A, B, or C')), 400
+                    
+                update_fields.append(f"{field} = %s")
+                params.append(data[field])
+        
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+        
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(class_id)
+        
+        query = f"UPDATE vsc_vehicle_classes SET {', '.join(update_fields)} WHERE id = %s RETURNING updated_at;"
+        cursor.execute(query, params)
+        
+        updated_at = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Vehicle classification {class_id} updated successfully',
+            'classification': {
+                'id': class_id,
+                'updated_at': updated_at.isoformat(),
+                **data
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update classification: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/multipliers/<multiplier_type>', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_admin_multipliers(multiplier_type):
+    """Get multipliers for admin management"""
+    try:
+        valid_types = ['term', 'deductible', 'mileage', 'age']
+        if multiplier_type not in valid_types:
+            return jsonify(error_response(f"Invalid multiplier type. Must be one of: {', '.join(valid_types)}")), 400
+        
+        table_name = f"vsc_{multiplier_type}_multipliers"
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute(f'''
+            SELECT * FROM {table_name} 
+            ORDER BY display_order, id;
+        ''')
+        
+        multipliers = cursor.fetchall()
+        
+        # Convert to proper format
+        multipliers_list = []
+        for multiplier in multipliers:
+            mult_dict = dict(multiplier)
+            mult_dict['multiplier'] = float(mult_dict['multiplier'])
+            mult_dict['created_at'] = mult_dict['created_at'].isoformat() if mult_dict['created_at'] else None
+            mult_dict['updated_at'] = mult_dict['updated_at'].isoformat() if mult_dict['updated_at'] else None
+            multipliers_list.append(mult_dict)
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'multiplier_type': multiplier_type,
+            'multipliers': multipliers_list,
+            'total': len(multipliers_list)
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get {multiplier_type} multipliers: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/multipliers/<multiplier_type>/<int:multiplier_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_multiplier(multiplier_type, multiplier_id):
+    """Update specific multiplier"""
+    try:
+        valid_types = ['term', 'deductible', 'mileage', 'age']
+        if multiplier_type not in valid_types:
+            return jsonify(error_response(f"Invalid multiplier type. Must be one of: {', '.join(valid_types)}")), 400
+        
+        data = request.get_json()
+        table_name = f"vsc_{multiplier_type}_multipliers"
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if multiplier exists
+        cursor.execute(f'SELECT id FROM {table_name} WHERE id = %s;', (multiplier_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Multiplier not found')), 404
+        
+        # Build update query based on multiplier type
+        update_fields = []
+        params = []
+        
+        common_fields = ['multiplier', 'description', 'display_order', 'active']
+        type_specific_fields = {
+            'term': ['term_months'],
+            'deductible': ['deductible_amount'],
+            'mileage': ['category', 'min_mileage', 'max_mileage'],
+            'age': ['category', 'min_age', 'max_age']
+        }
+        
+        allowed_fields = common_fields + type_specific_fields.get(multiplier_type, [])
+        
+        for field in allowed_fields:
+            if field in data:
+                update_fields.append(f"{field} = %s")
+                params.append(data[field])
+        
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+        
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(multiplier_id)
+        
+        query = f"UPDATE {table_name} SET {', '.join(update_fields)} WHERE id = %s RETURNING updated_at;"
+        cursor.execute(query, params)
+        
+        updated_at = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'{multiplier_type.title()} multiplier {multiplier_id} updated successfully',
+            'multiplier': {
+                'id': multiplier_id,
+                'type': multiplier_type,
+                'updated_at': updated_at.isoformat(),
+                **data
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update {multiplier_type} multiplier: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/coverage-levels', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_admin_coverage_levels():
+    """Get all coverage levels for admin management"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute('''
+            SELECT id, level_code, level_name, description, display_order, 
+                   active, created_at, updated_at
+            FROM vsc_coverage_levels 
+            ORDER BY display_order, level_code;
+        ''')
+        
+        coverage_levels = cursor.fetchall()
+        
+        # Convert to proper format
+        levels_list = []
+        for level in coverage_levels:
+            level_dict = dict(level)
+            level_dict['created_at'] = level_dict['created_at'].isoformat() if level_dict['created_at'] else None
+            level_dict['updated_at'] = level_dict['updated_at'].isoformat() if level_dict['updated_at'] else None
+            levels_list.append(level_dict)
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'coverage_levels': levels_list,
+            'total': len(levels_list)
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get coverage levels: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/coverage-levels', methods=['POST'])
+@token_required
+@role_required('admin')
+def create_coverage_level():
+    """Create new coverage level"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['level_code', 'level_name', 'description']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check for duplicate
+        cursor.execute('''
+            SELECT id FROM vsc_coverage_levels WHERE level_code = %s;
+        ''', (data['level_code'],))
+        
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Coverage level code already exists')), 409
+        
+        # Insert new coverage level
+        cursor.execute('''
+            INSERT INTO vsc_coverage_levels 
+            (level_code, level_name, description, display_order, active)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, created_at;
+        ''', (
+            data['level_code'], data['level_name'], data['description'],
+            data.get('display_order', 999), data.get('active', True)
+        ))
+        
+        level_id, created_at = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': 'Coverage level created successfully',
+            'coverage_level': {
+                'id': level_id,
+                'created_at': created_at.isoformat(),
+                **data
+            }
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create coverage level: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/coverage-levels/<int:level_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_coverage_level(level_id):
+    """Update coverage level"""
+    try:
+        data = request.get_json()
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if level exists
+        cursor.execute('SELECT id FROM vsc_coverage_levels WHERE id = %s;', (level_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Coverage level not found')), 404
+        
+        # Build update query
+        update_fields = []
+        params = []
+        
+        allowed_fields = ['level_code', 'level_name', 'description', 'display_order', 'active']
+        
+        for field in allowed_fields:
+            if field in data:
+                update_fields.append(f"{field} = %s")
+                params.append(data[field])
+        
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+        
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(level_id)
+        
+        query = f"UPDATE vsc_coverage_levels SET {', '.join(update_fields)} WHERE id = %s RETURNING updated_at;"
+        cursor.execute(query, params)
+        
+        updated_at = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Coverage level {level_id} updated successfully',
+            'coverage_level': {
+                'id': level_id,
+                'updated_at': updated_at.isoformat(),
+                **data
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update coverage level: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/base-rates', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_admin_base_rates():
+    """Get all base rates for admin management"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute('''
+            SELECT id, vehicle_class, coverage_level, base_rate, 
+                   effective_date, active, created_at, updated_at
+            FROM vsc_base_rates 
+            ORDER BY vehicle_class, coverage_level;
+        ''')
+        
+        base_rates = cursor.fetchall()
+        
+        # Convert to proper format
+        rates_list = []
+        for rate in base_rates:
+            rate_dict = dict(rate)
+            rate_dict['base_rate'] = float(rate_dict['base_rate'])
+            rate_dict['effective_date'] = rate_dict['effective_date'].isoformat() if rate_dict['effective_date'] else None
+            rate_dict['created_at'] = rate_dict['created_at'].isoformat() if rate_dict['created_at'] else None
+            rate_dict['updated_at'] = rate_dict['updated_at'].isoformat() if rate_dict['updated_at'] else None
+            rates_list.append(rate_dict)
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'base_rates': rates_list,
+            'total': len(rates_list)
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get base rates: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/base-rates', methods=['POST'])
+@token_required
+@role_required('admin')
+def create_base_rate():
+    """Create new base rate"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['vehicle_class', 'coverage_level', 'base_rate']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+        
+        if data['vehicle_class'] not in ['A', 'B', 'C']:
+            return jsonify(error_response('vehicle_class must be A, B, or C')), 400
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check for duplicate (same class, level, and effective date)
+        effective_date = data.get('effective_date', 'CURRENT_DATE')
+        cursor.execute('''
+            SELECT id FROM vsc_base_rates 
+            WHERE vehicle_class = %s AND coverage_level = %s AND effective_date = %s;
+        ''', (data['vehicle_class'], data['coverage_level'], effective_date))
+        
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Base rate already exists for this combination and date')), 409
+        
+        # Insert new base rate
+        cursor.execute('''
+            INSERT INTO vsc_base_rates 
+            (vehicle_class, coverage_level, base_rate, effective_date, active)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, created_at;
+        ''', (
+            data['vehicle_class'], data['coverage_level'], data['base_rate'],
+            effective_date, data.get('active', True)
+        ))
+        
+        rate_id, created_at = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': 'Base rate created successfully',
+            'base_rate': {
+                'id': rate_id,
+                'created_at': created_at.isoformat(),
+                **data
+            }
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to create base rate: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/base-rates/<int:rate_id>', methods=['PUT'])
+@token_required
+@role_required('admin')
+def update_base_rate(rate_id):
+    """Update base rate"""
+    try:
+        data = request.get_json()
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Check if rate exists
+        cursor.execute('SELECT id FROM vsc_base_rates WHERE id = %s;', (rate_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('Base rate not found')), 404
+        
+        # Build update query
+        update_fields = []
+        params = []
+        
+        allowed_fields = ['vehicle_class', 'coverage_level', 'base_rate', 'effective_date', 'active']
+        
+        for field in allowed_fields:
+            if field in data:
+                if field == 'vehicle_class' and data[field] not in ['A', 'B', 'C']:
+                    cursor.close()
+                    conn.close()
+                    return jsonify(error_response('vehicle_class must be A, B, or C')), 400
+                    
+                update_fields.append(f"{field} = %s")
+                params.append(data[field])
+        
+        if not update_fields:
+            cursor.close()
+            conn.close()
+            return jsonify(error_response('No valid fields to update')), 400
+        
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(rate_id)
+        
+        query = f"UPDATE vsc_base_rates SET {', '.join(update_fields)} WHERE id = %s RETURNING updated_at;"
+        cursor.execute(query, params)
+        
+        updated_at = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'Base rate {rate_id} updated successfully',
+            'base_rate': {
+                'id': rate_id,
+                'updated_at': updated_at.isoformat(),
+                **data
+            }
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to update base rate: {str(e)}")), 500
+
+
+# ================================
+# VSC ANALYTICS & REPORTING ENDPOINTS
+# ================================
+
+@app.route('/api/admin/vsc/analytics/rates-summary', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_vsc_rates_analytics():
+    """Get VSC rates analytics summary"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Get overall statistics
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total_rates,
+                COUNT(DISTINCT vehicle_class) as vehicle_classes,
+                COUNT(DISTINCT coverage_level) as coverage_levels,
+                COUNT(DISTINCT term_months) as term_options,
+                MIN(rate_amount) as min_rate,
+                MAX(rate_amount) as max_rate,
+                AVG(rate_amount) as avg_rate
+            FROM vsc_rate_matrix 
+            WHERE active = TRUE;
+        ''')
+        
+        summary = cursor.fetchone()
+        
+        # Get rates by vehicle class
+        cursor.execute('''
+            SELECT vehicle_class, 
+                   COUNT(*) as rate_count,
+                   MIN(rate_amount) as min_rate,
+                   MAX(rate_amount) as max_rate,
+                   AVG(rate_amount) as avg_rate
+            FROM vsc_rate_matrix 
+            WHERE active = TRUE
+            GROUP BY vehicle_class
+            ORDER BY vehicle_class;
+        ''')
+        
+        class_breakdown = cursor.fetchall()
+        
+        # Get rates by coverage level
+        cursor.execute('''
+            SELECT coverage_level,
+                   COUNT(*) as rate_count,
+                   MIN(rate_amount) as min_rate,
+                   MAX(rate_amount) as max_rate,
+                   AVG(rate_amount) as avg_rate
+            FROM vsc_rate_matrix 
+            WHERE active = TRUE
+            GROUP BY coverage_level
+            ORDER BY coverage_level;
+        ''')
+        
+        coverage_breakdown = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        analytics_data = {
+            'summary': {
+                'total_rates': summary[0],
+                'vehicle_classes': summary[1],
+                'coverage_levels': summary[2], 
+                'term_options': summary[3],
+                'rate_range': {
+                    'min': float(summary[4]) if summary[4] else 0,
+                    'max': float(summary[5]) if summary[5] else 0,
+                    'average': round(float(summary[6]), 2) if summary[6] else 0
+                }
+            },
+            'by_vehicle_class': [
+                {
+                    'class': row[0],
+                    'rate_count': row[1],
+                    'min_rate': float(row[2]),
+                    'max_rate': float(row[3]),
+                    'avg_rate': round(float(row[4]), 2)
+                } for row in class_breakdown
+            ],
+            'by_coverage_level': [
+                {
+                    'level': row[0],
+                    'rate_count': row[1],
+                    'min_rate': float(row[2]),
+                    'max_rate': float(row[3]),
+                    'avg_rate': round(float(row[4]), 2)
+                } for row in coverage_breakdown
+            ]
+        }
+        
+        return jsonify(success_response(analytics_data))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get VSC analytics: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/export/rates', methods=['GET'])
+@token_required
+@role_required('admin')
+def export_vsc_rates():
+    """Export VSC rates in CSV format"""
+    try:
+        export_format = request.args.get('format', 'csv')
+        vehicle_class = request.args.get('vehicle_class')
+        coverage_level = request.args.get('coverage_level')
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Build WHERE clause
+        where_conditions = ['active = TRUE']
+        params = []
+        
+        if vehicle_class:
+            where_conditions.append('vehicle_class = %s')
+            params.append(vehicle_class)
+            
+        if coverage_level:
+            where_conditions.append('coverage_level = %s')
+            params.append(coverage_level)
+        
+        where_clause = ' AND '.join(where_conditions)
+        
+        cursor.execute(f'''
+            SELECT vehicle_class, coverage_level, term_months, mileage_range_key,
+                   min_mileage, max_mileage, rate_amount, effective_date
+            FROM vsc_rate_matrix 
+            WHERE {where_clause}
+            ORDER BY vehicle_class, coverage_level, term_months, min_mileage;
+        ''', params)
+        
+        rates = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        if export_format == 'csv':
+            import csv
+            from io import StringIO
+            
+            output = StringIO()
+            writer = csv.writer(output)
+            
+            # Write header
+            writer.writerow([
+                'Vehicle Class', 'Coverage Level', 'Term (Months)', 'Mileage Range',
+                'Min Mileage', 'Max Mileage', 'Rate Amount', 'Effective Date'
+            ])
+            
+            # Write data
+            for rate in rates:
+                writer.writerow([
+                    rate[0], rate[1], rate[2], rate[3],
+                    rate[4], rate[5], float(rate[6]),
+                    rate[7].isoformat() if rate[7] else ''
+                ])
+            
+            csv_content = output.getvalue()
+            output.close()
+            
+            response = make_response(csv_content)
+            response.headers['Content-Type'] = 'text/csv'
+            response.headers['Content-Disposition'] = f'attachment; filename=vsc_rates_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
+            return response
+            
+        else:  # JSON format
+            rates_data = []
+            for rate in rates:
+                rates_data.append({
+                    'vehicle_class': rate[0],
+                    'coverage_level': rate[1],
+                    'term_months': rate[2],
+                    'mileage_range_key': rate[3],
+                    'min_mileage': rate[4],
+                    'max_mileage': rate[5],
+                    'rate_amount': float(rate[6]),
+                    'effective_date': rate[7].isoformat() if rate[7] else None
+                })
+            
+            return jsonify(success_response({
+                'rates': rates_data,
+                'export_info': {
+                    'total_records': len(rates_data),
+                    'filters': {
+                        'vehicle_class': vehicle_class,
+                        'coverage_level': coverage_level
+                    },
+                    'exported_at': datetime.utcnow().isoformat() + 'Z'
+                }
+            }))
+            
+    except Exception as e:
+        return jsonify(error_response(f"Export failed: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/import/rates', methods=['POST'])
+@token_required
+@role_required('admin')
+def import_vsc_rates_csv():
+    """Import VSC rates from uploaded CSV file"""
+    try:
+        if 'file' not in request.files:
+            return jsonify(error_response('No file uploaded')), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify(error_response('No file selected')), 400
+        
+        if not file.filename.lower().endswith('.csv'):
+            return jsonify(error_response('File must be CSV format')), 400
+        
+        import csv
+        from io import StringIO
+        
+        # Read and parse CSV
+        csv_content = file.read().decode('utf-8')
+        csv_reader = csv.DictReader(StringIO(csv_content))
+        
+        rates_data = []
+        errors = []
+        
+        required_columns = ['vehicle_class', 'coverage_level', 'term_months', 
+                           'mileage_range_key', 'min_mileage', 'max_mileage', 'rate_amount']
+        
+        for row_num, row in enumerate(csv_reader, start=2):  # Start at 2 because row 1 is header
+            # Validate required columns
+            missing_cols = [col for col in required_columns if not row.get(col)]
+            if missing_cols:
+                errors.append(f"Row {row_num}: Missing columns: {', '.join(missing_cols)}")
+                continue
+            
+            # Validate data types and values
+            try:
+                rate_data = {
+                    'vehicle_class': row['vehicle_class'].strip().upper(),
+                    'coverage_level': row['coverage_level'].strip().lower(),
+                    'term_months': int(row['term_months']),
+                    'mileage_range_key': row['mileage_range_key'].strip(),
+                    'min_mileage': int(row['min_mileage']),
+                    'max_mileage': int(row['max_mileage']),
+                    'rate_amount': float(row['rate_amount']),
+                    'effective_date': row.get('effective_date', 'CURRENT_DATE'),
+                    'active': row.get('active', 'true').lower() in ['true', '1', 'yes']
+                }
+                
+                # Validate vehicle class
+                if rate_data['vehicle_class'] not in ['A', 'B', 'C']:
+                    errors.append(f"Row {row_num}: Invalid vehicle_class '{rate_data['vehicle_class']}' (must be A, B, or C)")
+                    continue
+                
+                rates_data.append(rate_data)
+                
+            except (ValueError, TypeError) as e:
+                errors.append(f"Row {row_num}: Data validation error - {str(e)}")
+                continue
+        
+        if errors:
+            return jsonify(error_response({
+                'message': 'CSV validation failed',
+                'errors': errors[:10],  # Limit to first 10 errors
+                'total_errors': len(errors)
+            })), 400
+        
+        if not rates_data:
+            return jsonify(error_response('No valid data found in CSV')), 400
+        
+        # Import data to database
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Prepare bulk insert
+        insert_data = []
+        for rate in rates_data:
+            insert_data.append((
+                rate['vehicle_class'], rate['coverage_level'], rate['term_months'],
+                rate['mileage_range_key'], rate['min_mileage'], rate['max_mileage'],
+                rate['rate_amount'], rate['effective_date'], rate['active']
+            ))
+        
+        from psycopg2.extras import execute_values
+        
+        execute_values(cursor, '''
+            INSERT INTO vsc_rate_matrix 
+            (vehicle_class, coverage_level, term_months, mileage_range_key,
+             min_mileage, max_mileage, rate_amount, effective_date, active)
+            VALUES %s
+            ON CONFLICT (vehicle_class, coverage_level, term_months, mileage_range_key, effective_date)
+            DO UPDATE SET 
+                rate_amount = EXCLUDED.rate_amount,
+                updated_at = CURRENT_TIMESTAMP;
+        ''', insert_data)
+        
+        imported_count = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(success_response({
+            'message': f'CSV import completed successfully',
+            'imported_count': imported_count,
+            'total_rows_processed': len(rates_data),
+            'import_summary': {
+                'successful_imports': imported_count,
+                'validation_errors': len(errors)
+            }
+        })), 201
+        
+    except Exception as e:
+        return jsonify(error_response(f"CSV import failed: {str(e)}")), 500
+
+
+# ================================
+# VSC CACHE MANAGEMENT ENDPOINTS  
+# ================================
+
+@app.route('/api/admin/vsc/cache/clear', methods=['POST'])
+@token_required
+@role_required('admin')
+def clear_vsc_cache():
+    """Clear VSC rate manager cache"""
+    try:
+        from data.vsc_rates_data import rate_manager
+        
+        # Clear all cached data
+        cache_methods = [
+            'get_vehicle_classification',
+            'get_coverage_levels', 
+            'get_term_multipliers',
+            'get_deductible_multipliers',
+            'get_mileage_multipliers',
+            'get_age_multipliers'
+        ]
+        
+        cleared_caches = []
+        for method_name in cache_methods:
+            method = getattr(rate_manager, method_name, None)
+            if method and hasattr(method, 'cache_clear'):
+                method.cache_clear()
+                cleared_caches.append(method_name)
+        
+        return jsonify(success_response({
+            'message': 'VSC cache cleared successfully',
+            'cleared_caches': cleared_caches,
+            'cache_clear_time': datetime.utcnow().isoformat() + 'Z'
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to clear cache: {str(e)}")), 500
+
+
+@app.route('/api/admin/vsc/cache/status', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_vsc_cache_status():
+    """Get VSC cache status information"""
+    try:
+        from data.vsc_rates_data import rate_manager
+        
+        cache_info = {}
+        cache_methods = [
+            'get_vehicle_classification',
+            'get_coverage_levels',
+            'get_term_multipliers', 
+            'get_deductible_multipliers',
+            'get_mileage_multipliers',
+            'get_age_multipliers'
+        ]
+        
+        for method_name in cache_methods:
+            method = getattr(rate_manager, method_name, None)
+            if method and hasattr(method, 'cache_info'):
+                info = method.cache_info()
+                cache_info[method_name] = {
+                    'hits': info.hits,
+                    'misses': info.misses,
+                    'current_size': info.currsize,
+                    'max_size': info.maxsize
+                }
+        
+        return jsonify(success_response({
+            'cache_status': cache_info,
+            'database_integration': True,
+            'status_check_time': datetime.utcnow().isoformat() + 'Z'
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Failed to get cache status: {str(e)}")), 500
+    
 
 # For local development only
 if __name__ == '__main__':
