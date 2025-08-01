@@ -19,11 +19,9 @@ import json
 from helcim_integration import HelcimPaymentProcessor, validate_helcim_config
 
 # Database configuration
-DATABASE_URL = os.environ.get(
-    'DATABASE_URL', 'postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require')
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
-VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get(
-    'BLOB_READ_WRITE_TOKEN', "vercel_blob_rw_NyJGOwmGasD868JR_SRRTKZEvjyrFPjJKXt8v4HwARx9Qmy")
+VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN')
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))

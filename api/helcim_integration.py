@@ -313,3 +313,25 @@ class HelcimPaymentProcessor:
                 'success': False,
                 'error': f'Failed to retrieve transaction: {str(e)}'
             }
+   
+ 
+def validate_helcim_config():
+    """Validate Helcim configuration"""
+    required_vars = [
+        'HELCIM_API_TOKEN',
+        'HELCIM_TERMINAL_ID'
+    ]
+    
+    missing_vars = [var for var in required_vars if not os.environ.get(var)]
+    
+    if missing_vars:
+        return {
+            'valid': False,
+            'missing_variables': missing_vars,
+            'message': f"Missing required environment variables: {', '.join(missing_vars)}"
+        }
+    
+    return {
+        'valid': True,
+        'message': 'Helcim configuration is valid'
+    }
