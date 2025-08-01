@@ -3,12 +3,13 @@ import requests
 import hashlib
 import hmac
 import json
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 import logging
 
 class HelcimPaymentProcessor:
-    """Complete Helcim payment processing implementation"""
+    """Complete Helcim payment processing implementation with idempotency support"""
     
     def __init__(self):
         # Helcim API Configuration
@@ -21,17 +22,26 @@ class HelcimPaymentProcessor:
         if not all([self.api_token, self.terminal_id]):
             raise ValueError("Missing required Helcim configuration: HELCIM_API_TOKEN, HELCIM_TERMINAL_ID")
     
-    def process_credit_card_payment(self, payment_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_idempotency_key(self) -> str:
+        """Generate a unique idempotency key for Helcim API requests"""
+        return str(uuid.uuid4())
+    
+    def process_credit_card_payment(self, payment_data: Dict[str, Any], idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         """
         Process credit card payment via Helcim API
         
         Args:
             payment_data: Dictionary containing payment information
+            idempotency_key: Optional custom idempotency key (will generate if not provided)
             
         Returns:
             Dictionary with payment result
         """
         try:
+            # Generate idempotency key if not provided
+            if not idempotency_key:
+                idempotency_key = self._generate_idempotency_key()
+            
             # Extract and validate payment data
             amount = float(payment_data.get('amount', 0))
             card_info = payment_data.get('card_info', {})
@@ -47,11 +57,12 @@ class HelcimPaymentProcessor:
                     'error': f"Missing card fields: {', '.join(missing_fields)}"
                 }
             
-            # Prepare Helcim API request
+            # Prepare Helcim API request with idempotency key
             headers = {
                 'Authorization': f'Bearer {self.api_token}',
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'idempotency-key': idempotency_key  # REQUIRED for Helcim Payment API
             }
             
             # Format expiry date (MMYY format for Helcim)
@@ -68,7 +79,7 @@ class HelcimPaymentProcessor:
                     'cvv': card_info['cvv']
                 },
                 'amount': round(amount * 100),  # Helcim expects amount in cents
-                'currency': 'CAD',  # or 'USD' based on your needs
+                'currency': 'USD',  # or 'CAD' based on your needs
                 'type': 'purchase',
                 'customerCode': payment_data.get('customer_id', ''),
                 'invoiceNumber': transaction_number,
@@ -86,6 +97,9 @@ class HelcimPaymentProcessor:
                 }
             }
             
+            # Log idempotency key for debugging/tracking
+            logging.info(f"Processing payment with idempotency key: {idempotency_key}")
+            
             # Make API request to Helcim
             response = requests.post(
                 f"{self.base_url}/card-transactions",
@@ -96,27 +110,141 @@ class HelcimPaymentProcessor:
             
             response_data = response.json()
             
+            # Handle idempotency conflicts (409 status)
+            if response.status_code == 409:
+                return {
+                    'success': False,
+                    'error': 'Duplicate transaction detected with different payload',
+                    'idempotency_conflict': True,
+                    'idempotency_key': idempotency_key
+                }
+            
             if response.status_code == 200 and response_data.get('status') == 'APPROVED':
                 # Successful payment
-                return self._format_success_response(response_data, amount)
+                result = self._format_success_response(response_data, amount)
+                result['idempotency_key'] = idempotency_key
+                return result
             else:
                 # Failed payment
-                return self._format_error_response(response_data, response.status_code)
+                result = self._format_error_response(response_data, response.status_code)
+                result['idempotency_key'] = idempotency_key
+                return result
                 
         except requests.exceptions.RequestException as e:
             logging.error(f"Helcim API request failed: {str(e)}")
             return {
                 'success': False,
                 'error': 'Payment processor temporarily unavailable. Please try again.',
-                'technical_error': str(e)
+                'technical_error': str(e),
+                'idempotency_key': idempotency_key
             }
         except Exception as e:
             logging.error(f"Helcim payment processing error: {str(e)}")
             return {
                 'success': False,
                 'error': 'Payment processing failed. Please check your information and try again.',
-                'technical_error': str(e)
+                'technical_error': str(e),
+                'idempotency_key': idempotency_key
             }
+    
+    def process_refund(self, original_transaction_id: str, refund_amount: float, reason: str = "", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Process refund via Helcim API
+        
+        Args:
+            original_transaction_id: Helcim transaction ID to refund
+            refund_amount: Amount to refund
+            reason: Reason for refund
+            idempotency_key: Optional custom idempotency key
+            
+        Returns:
+            Dictionary with refund result
+        """
+        try:
+            # Generate idempotency key if not provided
+            if not idempotency_key:
+                idempotency_key = self._generate_idempotency_key()
+            
+            headers = {
+                'Authorization': f'Bearer {self.api_token}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'idempotency-key': idempotency_key  # REQUIRED for Helcim Payment API
+            }
+            
+            payload = {
+                'terminalId': self.terminal_id,
+                'originalTransactionId': original_transaction_id,
+                'amount': round(refund_amount * 100),  # Amount in cents
+                'type': 'refund',
+                'description': f"Refund: {reason}" if reason else "Refund processed"
+            }
+            
+            logging.info(f"Processing refund with idempotency key: {idempotency_key}")
+            
+            response = requests.post(
+                f"{self.base_url}/card-transactions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            response_data = response.json()
+            
+            # Handle idempotency conflicts
+            if response.status_code == 409:
+                return {
+                    'success': False,
+                    'error': 'Duplicate refund request detected with different payload',
+                    'idempotency_conflict': True,
+                    'idempotency_key': idempotency_key
+                }
+            
+            if response.status_code == 200 and response_data.get('status') == 'APPROVED':
+                return {
+                    'success': True,
+                    'status': 'completed',
+                    'refund_transaction_id': response_data.get('transactionId'),
+                    'idempotency_key': idempotency_key,
+                    'processor_data': {
+                        'provider': 'Helcim',
+                        'refund_id': response_data.get('transactionId'),
+                        'original_transaction_id': original_transaction_id,
+                        'amount_refunded': refund_amount,
+                        'status': 'processed',
+                        'processed_at': datetime.utcnow().isoformat(),
+                        'estimated_completion': '3-5 business days'
+                    }
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': response_data.get('responseMessage', 'Refund processing failed'),
+                    'processor_data': response_data,
+                    'idempotency_key': idempotency_key
+                }
+                
+        except Exception as e:
+            logging.error(f"Helcim refund error: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Refund processing failed: {str(e)}',
+                'idempotency_key': idempotency_key
+            }
+    
+    def retry_transaction_with_same_key(self, payment_data: Dict[str, Any], original_idempotency_key: str) -> Dict[str, Any]:
+        """
+        Retry a transaction with the same idempotency key (for network failures)
+        
+        Args:
+            payment_data: Original payment data
+            original_idempotency_key: The idempotency key from the original request
+            
+        Returns:
+            Dictionary with payment result
+        """
+        logging.info(f"Retrying transaction with idempotency key: {original_idempotency_key}")
+        return self.process_credit_card_payment(payment_data, original_idempotency_key)
     
     def _format_success_response(self, helcim_response: Dict[str, Any], amount: float) -> Dict[str, Any]:
         """Format successful Helcim response"""
@@ -137,7 +265,7 @@ class HelcimPaymentProcessor:
                 'last_four': helcim_response.get('cardNumber', '')[-4:] if helcim_response.get('cardNumber') else '',
                 'processed_at': datetime.utcnow().isoformat(),
                 'amount_processed': amount,
-                'currency': helcim_response.get('currency', 'CAD')
+                'currency': helcim_response.get('currency', 'USD')
             },
             'fees': {
                 'processing_fee': processing_fee,
@@ -181,71 +309,6 @@ class HelcimPaymentProcessor:
                 'failed_at': datetime.utcnow().isoformat()
             }
         }
-    
-    def process_refund(self, original_transaction_id: str, refund_amount: float, reason: str = "") -> Dict[str, Any]:
-        """
-        Process refund via Helcim API
-        
-        Args:
-            original_transaction_id: Helcim transaction ID to refund
-            refund_amount: Amount to refund
-            reason: Reason for refund
-            
-        Returns:
-            Dictionary with refund result
-        """
-        try:
-            headers = {
-                'Authorization': f'Bearer {self.api_token}',
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-            
-            payload = {
-                'terminalId': self.terminal_id,
-                'originalTransactionId': original_transaction_id,
-                'amount': round(refund_amount * 100),  # Amount in cents
-                'type': 'refund',
-                'description': f"Refund: {reason}" if reason else "Refund processed"
-            }
-            
-            response = requests.post(
-                f"{self.base_url}/card-transactions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            
-            response_data = response.json()
-            
-            if response.status_code == 200 and response_data.get('status') == 'APPROVED':
-                return {
-                    'success': True,
-                    'status': 'completed',
-                    'refund_transaction_id': response_data.get('transactionId'),
-                    'processor_data': {
-                        'provider': 'Helcim',
-                        'refund_id': response_data.get('transactionId'),
-                        'original_transaction_id': original_transaction_id,
-                        'amount_refunded': refund_amount,
-                        'status': 'processed',
-                        'processed_at': datetime.utcnow().isoformat(),
-                        'estimated_completion': '3-5 business days'
-                    }
-                }
-            else:
-                return {
-                    'success': False,
-                    'error': response_data.get('responseMessage', 'Refund processing failed'),
-                    'processor_data': response_data
-                }
-                
-        except Exception as e:
-            logging.error(f"Helcim refund error: {str(e)}")
-            return {
-                'success': False,
-                'error': f'Refund processing failed: {str(e)}'
-            }
     
     def verify_webhook_signature(self, headers: Dict[str, str], payload: bytes) -> bool:
         """
@@ -313,8 +376,8 @@ class HelcimPaymentProcessor:
                 'success': False,
                 'error': f'Failed to retrieve transaction: {str(e)}'
             }
-   
- 
+
+
 def validate_helcim_config():
     """Validate Helcim configuration"""
     required_vars = [
@@ -335,3 +398,35 @@ def validate_helcim_config():
         'valid': True,
         'message': 'Helcim configuration is valid'
     }
+
+
+# Example usage demonstrating idempotency
+if __name__ == "__main__":
+    processor = HelcimPaymentProcessor()
+    
+    payment_data = {
+        'amount': 100.00,
+        'card_info': {
+            'card_number': '4111111111111111',
+            'expiry_month': '12',
+            'expiry_year': '2025',
+            'cvv': '123'
+        },
+        'billing_info': {
+            'first_name': 'John',
+            'last_name': 'Doe',
+            'email': 'john@example.com'
+        }
+    }
+    
+    # First attempt
+    result1 = processor.process_credit_card_payment(payment_data)
+    print(f"First attempt result: {result1}")
+    
+    # If network failed, retry with same idempotency key
+    if not result1['success'] and 'network' in str(result1.get('technical_error', '')).lower():
+        result2 = processor.retry_transaction_with_same_key(
+            payment_data, 
+            result1['idempotency_key']
+        )
+        print(f"Retry attempt result: {result2}")
