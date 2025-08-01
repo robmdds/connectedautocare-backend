@@ -12,11 +12,11 @@ from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from werkzeug.utils import secure_filename
 from PIL import Image
 import io
 import requests
 import json
+from helcim_integration import HelcimPaymentProcessor, validate_helcim_config
 
 # Database configuration
 DATABASE_URL = os.environ.get(
@@ -6590,56 +6590,48 @@ def process_payment():
 def process_credit_card_payment(data, amount, transaction_number):
     """Process credit card payment via Helcim API"""
     try:
-        # Extract credit card info
-        card_info = data.get('card_info', {})
-        billing_info = data.get('billing_info', {})
-        
-        # Validate card info
-        required_card_fields = ['card_number', 'expiry_month', 'expiry_year', 'cvv']
-        missing_fields = [field for field in required_card_fields if not card_info.get(field)]
-        if missing_fields:
-            return {'success': False, 'error': f"Missing card fields: {', '.join(missing_fields)}"}
-        
-        # In production, integrate with Helcim API
-        # For now, simulate successful payment
-        if amount > 0:
-            # Simulate API call to Helcim
-            processor_transaction_id = f"HELCIM-{transaction_number}"
-            auth_code = f"AUTH{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-            
-            # Calculate fees (simulate 2.9% + $0.30 processing fee)
-            processing_fee = round(amount * 0.029 + 0.30, 2)
-            
+        # Validate Helcim configuration
+        config_check = validate_helcim_config()
+        if not config_check['valid']:
             return {
-                'success': True,
-                'status': 'completed',
-                'processor_transaction_id': processor_transaction_id,
-                'processor_data': {
-                    'provider': 'Helcim',
-                    'auth_code': auth_code,
-                    'last_four': card_info['card_number'][-4:],
-                    'card_type': get_card_type(card_info['card_number']),
-                    'processed_at': datetime.utcnow().isoformat()
-                },
-                'fees': {
-                    'processing_fee': processing_fee,
-                    'total_fees': processing_fee
-                },
-                'taxes': {
-                    'sales_tax': round(amount * 0.07, 2),  # 7% sales tax
-                    'tax_rate': 0.07
-                },
-                'next_steps': [
-                    'Payment confirmation email sent',
-                    'Contract will be generated within 2-3 business days',
-                    'You will receive contract via email'
-                ]
+                'success': False,
+                'error': 'Payment processor configuration error',
+                'technical_error': config_check['message']
             }
-        else:
-            return {'success': False, 'error': 'Invalid payment amount'}
-            
+        
+        # Initialize Helcim processor
+        helcim = HelcimPaymentProcessor()
+        
+        # Prepare payment data
+        payment_data = {
+            **data,
+            'amount': amount,
+            'transaction_number': transaction_number
+        }
+        
+        # Process payment
+        result = helcim.process_credit_card_payment(payment_data)
+        
+        # Add sales tax if successful
+        if result.get('success'):
+            tax_rate = 0.07
+            tax_amount = round(amount * tax_rate, 2)
+            result['taxes'] = {
+                'sales_tax': tax_amount,
+                'tax_rate': tax_rate
+            }
+        
+        return result
+        
     except Exception as e:
-        return {'success': False, 'error': f'Credit card processing failed: {str(e)}'}
+        import traceback
+        print(f"Payment processing error: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return {
+            'success': False,
+            'error': 'Payment processing temporarily unavailable',
+            'technical_error': str(e)
+        }
 
 
 def setup_financing_plan(data, amount, transaction_number):
@@ -7155,48 +7147,74 @@ def validate_card_endpoint():
 # PAYMENT WEBHOOK HANDLERS
 # ================================
 
+@app.route('/api/admin/helcim/status', methods=['GET'])
+@token_required
+@role_required('admin')
+def helcim_status():
+    """Check Helcim integration status"""
+    try:
+        from helcim_integration import validate_helcim_config, test_helcim_connection
+        
+        # Validate configuration
+        config_result = validate_helcim_config()
+        
+        # Test connection if config is valid
+        connection_result = {'success': False, 'message': 'Configuration invalid'}
+        if config_result['valid']:
+            connection_result = test_helcim_connection()
+        
+        return jsonify(success_response({
+            'configuration': config_result,
+            'connection': connection_result,
+            'integration_status': 'operational' if config_result['valid'] and connection_result['success'] else 'needs_configuration'
+        }))
+        
+    except Exception as e:
+        return jsonify(error_response(f"Status check failed: {str(e)}")), 500
+    
+
 @app.route('/api/webhooks/helcim', methods=['POST'])
 def helcim_webhook():
-    """Handle Helcim payment webhooks"""
+    """Handle Helcim payment webhooks with proper signature verification"""
     try:
-        data = request.get_json()
+        from helcim_integration import handle_helcim_webhook
         
-        # Verify webhook signature (in production)
-        # if not verify_helcim_signature(request.headers, request.data):
-        #     return jsonify({'error': 'Invalid signature'}), 400
+        # Get raw request data for signature verification
+        raw_data = request.get_data()
+        headers = dict(request.headers)
         
-        transaction_number = data.get('transaction_number')
-        status = data.get('status')
-        processor_data = data.get('processor_data', {})
+        # Process webhook
+        result, status_code = handle_helcim_webhook(raw_data, headers)
         
-        if not transaction_number:
-            return jsonify({'error': 'Missing transaction_number'}), 400
+        if status_code != 200:
+            return jsonify(result), status_code
         
-        # Update transaction status in database
-        conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE transactions 
-            SET status = %s, 
-                processed_at = CURRENT_TIMESTAMP,
-                processor_response = %s
-            WHERE transaction_number = %s;
-        ''', (status, json.dumps(processor_data), transaction_number))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        # Send confirmation email if successful
-        if status == 'completed':
-            # send_payment_confirmation_email(transaction_number)
-            pass
+        # Update transaction in database
+        transaction_id = result.get('transaction_id')
+        if transaction_id:
+            conn = psycopg2.connect(DATABASE_URL)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE transactions 
+                SET status = %s, 
+                    processed_at = CURRENT_TIMESTAMP,
+                    processor_response = %s
+                WHERE processor_response->>'transaction_id' = %s;
+            ''', (
+                result['status'],
+                json.dumps(result['processor_data']),
+                transaction_id
+            ))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
         
         return jsonify({'received': True}), 200
         
     except Exception as e:
-        print(f"Webhook error: {str(e)}")
+        print(f"Webhook processing error: {str(e)}")
         return jsonify({'error': 'Webhook processing failed'}), 500
 
 
