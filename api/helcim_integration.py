@@ -13,10 +13,10 @@ class HelcimPaymentProcessor:
     
     def __init__(self):
         # Helcim API Configuration
-        self.api_token = os.environ.get('HELCIM_API_TOKEN')
-        self.terminal_id = os.environ.get('HELCIM_TERMINAL_ID')
+        self.api_token = os.environ.get('HELCIM_API_TOKEN', 'aB@p8sL2!OYmW@!CVFenAP@mRgi@A2hT-rtGH4Pe0c%Bqwpy2ZO*AzAYE4s6@N!y')
+        self.terminal_id = os.environ.get('HELCIM_TERMINAL_ID', '79167')
         self.base_url = "https://api.helcim.com/v2"
-        self.webhook_secret = os.environ.get('HELCIM_WEBHOOK_SECRET')
+        self.webhook_secret = os.environ.get('HELCIM_WEBHOOK_SECRET', '0gv8Cbl1UFuE4oaQGThGVt1yWcqCS1O2')
         
         # Validate required configuration
         if not all([self.api_token, self.terminal_id]):
