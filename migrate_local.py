@@ -520,14 +520,51 @@ def run_migration():
         return False
 
 
+def create_protection_plans_table():
+    """Create protection_plans table if it doesn't exist"""
+    conn = psycopg2.connect(DATABASE_URL)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS protection_plans (
+                id SERIAL PRIMARY KEY,
+                plan_id VARCHAR(255) UNIQUE NOT NULL,
+                transaction_id UUID REFERENCES transactions(id),
+                customer_email VARCHAR(255) NOT NULL,
+                plan_type VARCHAR(50) NOT NULL,
+                plan_name VARCHAR(255) NOT NULL,
+                coverage_details JSONB,
+                vehicle_info JSONB,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                status VARCHAR(50) DEFAULT 'active',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_protection_plans_customer_email 
+            ON protection_plans(customer_email);
+            
+            CREATE INDEX IF NOT EXISTS idx_protection_plans_plan_id 
+            ON protection_plans(plan_id);
+            
+            CREATE INDEX IF NOT EXISTS idx_protection_plans_status 
+            ON protection_plans(status);
+        ''')
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print("✅ Protection plans table created/verified")
+        
+    except Exception as e:
+        conn.rollback()
+        cursor.close()
+        conn.close()
+        print(f"❌ Error creating protection plans table: {str(e)}")
+
+
 if __name__ == "__main__":
-    success = run_migration()
-    if success:
-        print("\n✅ Ready to deploy to Vercel!")
-        print("📝 Next steps:")
-        print("   1. Update your environment variables in Vercel")
-        print("   2. Deploy with: vercel --prod")
-        print("   3. Test the API endpoints")
-        print("   4. Update index.py to use database instead of in-memory storage")
-    else:
-        print("\n❌ Migration failed. Please check the error above.")
+    create_protection_plans_table()
