@@ -4248,7 +4248,6 @@ def get_settings_status():
     """Get status of database settings integration"""
     try:
         if settings_service.connection_available:
-            from services.database_settings_service import settings_service
             
             # Get sample settings to verify database connectivity
             admin_fee = get_admin_fee()
