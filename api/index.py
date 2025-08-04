@@ -4285,10 +4285,7 @@ def get_settings_status():
 def refresh_settings_cache():
     """Refresh the database settings cache"""
     try:
-        if settings_service.connection_available:
-            from services.database_settings_service import settings_service
-            from services.hero_rating_service import HeroRatingService
-            
+        if settings_service.connection_available:            
             # Clear settings cache
             if settings_service:
                 settings_service.clear_cache()
