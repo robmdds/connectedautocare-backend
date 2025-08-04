@@ -564,7 +564,33 @@ def create_protection_plans_table():
         cursor.close()
         conn.close()
         print(f"❌ Error creating protection plans table: {str(e)}")
+    
+    
+def add_updated_at_to_tables():
+    conn = psycopg2.connect(DATABASE_URL)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            ALTER TABLE pricing
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        ''')
+        cursor.execute('''
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        ''')
+        cursor.execute('''
+            ALTER TABLE settings
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        ''')
+        conn.commit()
+        print("✅ Added updated_at columns to pricing, products, and settings tables")
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Error adding updated_at columns: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
 
 
 if __name__ == "__main__":
-    create_protection_plans_table()
+    add_updated_at_to_tables()
