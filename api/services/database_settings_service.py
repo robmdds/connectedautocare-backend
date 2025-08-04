@@ -11,8 +11,7 @@ import json
 from typing import Optional, Dict, Any
 from functools import lru_cache
 import os
-from dotenv import load_dotenv
-load_dotenv()
+
 
 class DatabaseSettingsService:
     def __init__(self, database_url: str = None):
