@@ -4242,6 +4242,79 @@ def lookup_vsc_rate():
         return jsonify(error_response(f"Rate lookup failed: {str(e)}")), 500
 
 
+# Utility endpoint to check database settings status
+@app.route('/api/admin/settings/status', methods=['GET'])
+def get_settings_status():
+    """Get status of database settings integration"""
+    try:
+        if settings_service.connection_available:
+            from services.database_settings_service import settings_service
+            
+            # Get sample settings to verify database connectivity
+            admin_fee = get_admin_fee()
+            wholesale_discount = get_wholesale_discount()
+            tax_rate = get_tax_rate()
+            
+            return jsonify({
+                'success': True,
+                'settings_service.connection_available': True,
+                'sample_settings': {
+                    'admin_fee': admin_fee,
+                    'wholesale_discount': wholesale_discount,
+                    'tax_rate': tax_rate
+                },
+                'message': 'Database settings service is operational'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'settings_service.connection_available': False,
+                'message': 'Database settings service not available - using hardcoded fallback values'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'settings_service.connection_available': False,
+            'error': f"Settings service error: {str(e)}",
+            'message': 'Database settings service encountered an error'
+        }), 500
+
+
+# Utility endpoint to refresh settings cache
+@app.route('/api/admin/settings/refresh', methods=['POST'])
+def refresh_settings_cache():
+    """Refresh the database settings cache"""
+    try:
+        if settings_service.connection_available:
+            from services.database_settings_service import settings_service
+            from services.hero_rating_service import HeroRatingService
+            
+            # Clear settings cache
+            if settings_service:
+                settings_service.clear_cache()
+            
+            # Refresh hero service settings
+            hero_service_instance = HeroRatingService()
+            hero_service_instance.refresh_settings()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Settings cache refreshed successfully',
+                'timestamp': datetime.now(timezone.utc).isoformat() + 'Z'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Database settings service not available'
+            }), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f"Cache refresh error: {str(e)}"
+        }), 500
+
 
 # ================================
 # VSC ADMIN CRUD ENDPOINTS
