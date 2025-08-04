@@ -94,7 +94,7 @@ def get_price_from_db_or_fallback(product_code, term_years, customer_type='retai
     """
     try:
         # Try database first
-        database_url = os.environ.get('POSTGRES_URL')
+        database_url = os.environ.get('DATABASE_URL')
         if database_url:
             import psycopg2
 

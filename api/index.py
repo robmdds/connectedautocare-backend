@@ -7,6 +7,7 @@ Complete insurance platform with customer API, admin panel, and user management
 import os
 import sys
 import time
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, make_response
@@ -17,6 +18,24 @@ from PIL import Image
 import io
 import requests
 import json
+
+try:
+    from services.database_settings_service import (
+        get_admin_fee, get_wholesale_discount, get_tax_rate, 
+        get_processing_fee, get_dealer_fee, settings_service
+    )
+except ImportError as e:
+    print(f"Warning: Failed to import database_settings_service: {e}")
+    class DummySettingsService:
+        def is_database_available(self): return False
+        def clear_cache(self): pass
+    settings_service = DummySettingsService()
+    def get_admin_fee(product_type: str = 'default') -> float: return 25.00
+    def get_wholesale_discount() -> float: return 0.15
+    def get_tax_rate(state: str = 'FL') -> float: return 0.07
+    def get_processing_fee() -> float: return 15.00
+    def get_dealer_fee() -> float: return 50.00
+
 
 # Database configuration
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -188,11 +207,13 @@ try:
     from services.vsc_rating_service import VSCRatingService  # This now uses database
     from services.vin_decoder_service import VINDecoderService
     from data.hero_products_data import get_hero_products
-    from data.vsc_rates_data import get_vsc_coverage_options, calculate_vsc_price, get_vehicle_class  # Updated imports
+    from data.vsc_rates_data import get_vsc_coverage_options  # Updated imports
     from utils.response_helpers import success_response, error_response
     customer_services_available = True
+    HERO_SERVICE_AVAILABLE = True
 except ImportError as e:
     customer_services_available = False
+    HERO_SERVICE_AVAILABLE = False
     # Create fallback classes to prevent crashes
     class HeroRatingService:
         def generate_quote(self, *args, **kwargs):
@@ -369,6 +390,14 @@ except ImportError as e:
             return {"success": False, "error": "Enhanced VIN service not available"}
     
     enhanced_vin_service = EnhancedVINDecoderService()
+
+try:
+    from data.vsc_rates_data import calculate_vsc_price
+    VSC_PRICING_AVAILABLE = True
+except ImportError:
+    VSC_PRICING_AVAILABLE = False
+    print("Warning: VSC pricing system not available")
+
 
 # App configuration
 app.config.update(
@@ -679,39 +708,47 @@ def get_hero_products_by_category(category):
 
 @app.route('/api/hero/quote', methods=['POST'])
 def generate_hero_quote():
-    """Generate quote for Hero products"""
-    if not customer_services_available:
+    if not customer_services_available or not HERO_SERVICE_AVAILABLE:
         return jsonify({"error": "Hero products service not available"}), 503
-
+    
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "Request body is required"}), 400
-
-        # Validate required fields
+        
         required_fields = ['product_type', 'term_years']
-        missing_fields = [
-            field for field in required_fields if field not in data]
+        missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
-
-        # Generate quote
-        quote_result = hero_service.generate_quote(
-            product_type=data['product_type'],
-            term_years=data['term_years'],
-            coverage_limit=data.get('coverage_limit', 500),
-            customer_type=data.get('customer_type', 'retail'),
-            state=data.get('state', 'FL'),
-            zip_code=data.get('zip_code', '33101')
-        )
-
-        if quote_result.get('success'):
-            return jsonify(success_response(quote_result))
-        else:
-            return jsonify({"error": quote_result.get('error', 'Quote generation failed')}), 400
-
+        
+        try:
+            hero_service = HeroRatingService()
+            quote_result = hero_service.generate_quote(
+                product_type=data['product_type'],
+                term_years=data['term_years'],
+                coverage_limit=data.get('coverage_limit', 500),
+                customer_type=data.get('customer_type', 'retail'),
+                state=data.get('state', 'FL'),
+                zip_code=data.get('zip_code', '33101')
+            )
+            
+            if quote_result.get('success'):
+                quote_result['database_integration'] = True
+                quote_result['database_settings_used'] = settings_service.connection_available
+                quote_result['system_info'] = {
+                    'settings_source': 'database' if settings_service.connection_available else 'fallback',
+                    'admin_fee_source': 'database' if settings_service.connection_available else 'hardcoded',
+                    'discount_source': 'database' if settings_service.connection_available else 'hardcoded',
+                    'tax_source': 'database' if settings_service.connection_available else 'hardcoded'
+                }
+                return jsonify(success_response(quote_result))
+            else:
+                return jsonify({"error": quote_result.get('error', 'Quote generation failed')}), 400
+        except Exception as hero_error:
+            print(f"Hero service error: {hero_error}")
+            return jsonify({"error": f"Hero quote generation failed: {str(hero_error)}"}), 500
     except Exception as e:
-        return jsonify({"error": f"Quote generation error: {str(e)}"}), 500
+        return jsonify({"error": f"Hero quote error: {str(e)}"}), 500
 
 # VSC Rating API
 
@@ -779,26 +816,22 @@ def generate_vsc_quote():
         if not data:
             return jsonify({"error": "Request body is required"}), 400
 
-        # Check if this is a VIN-based quote request
+        # Handle VIN-based auto-population
         vin = data.get('vin', '').strip().upper()
-
-        # If VIN provided and enhanced service available, try VIN-based approach first
         if vin and enhanced_vin_available:
             try:
-                # Decode VIN and populate missing fields
                 vin_result = enhanced_vin_service.decode_vin(vin)
                 if vin_result.get('success'):
                     vehicle_info = vin_result['vehicle_info']
-
-                    # Use VIN data to fill missing fields
+                    
+                    # Auto-populate missing fields from VIN
                     if not data.get('make'):
                         data['make'] = vehicle_info.get('make', '')
                     if not data.get('model'):
                         data['model'] = vehicle_info.get('model', '')
                     if not data.get('year'):
                         data['year'] = vehicle_info.get('year', 0)
-
-                    # Mark as auto-populated
+                    
                     data['auto_populated'] = True
                     data['vin_decoded'] = vehicle_info
             except Exception as e:
@@ -810,162 +843,163 @@ def generate_vsc_quote():
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
-        # Ensure proper data types
+        # Parse and validate input data
         try:
-            make = data['make']
-            model = data.get('model', '')
+            make = data['make'].strip()
+            model = data.get('model', '').strip()
             year = int(data['year'])
             mileage = int(data['mileage'])
-            coverage_level = data.get('coverage_level', 'gold')
+            coverage_level = data.get('coverage_level', 'gold').lower()
             term_months = int(data.get('term_months', 36))
             deductible = int(data.get('deductible', 100))
-            customer_type = data.get('customer_type', 'retail')
+            customer_type = data.get('customer_type', 'retail').lower()
         except (ValueError, TypeError) as e:
             return jsonify({"error": f"Invalid input data: {str(e)}"}), 400
 
-        # NEW: Use database-driven calculate_vsc_price function directly
-        try:
-            price_result = calculate_vsc_price(
-                make=make,
-                year=year,
-                mileage=mileage,
-                coverage_level=coverage_level,
-                term_months=term_months,
-                deductible=deductible,
-                customer_type=customer_type
-            )
-            
-            if not price_result.get('success'):
-                return jsonify({"error": price_result.get('error', 'Price calculation failed')}), 400
-            
-            # Check if vehicle is eligible (the new function handles this)
-            vehicle_class = price_result.get('vehicle_class', 'B')
-            calculated_price = price_result.get('calculated_price', 0)
-            pricing_method = price_result.get('pricing_method', 'calculated')
-            
-            # Add administrative fee and tax (if not already included)
-            admin_fee = 50.00
-            tax_rate = 0.07
-            
-            subtotal = calculated_price + admin_fee
-            tax_amount = subtotal * tax_rate
-            total_price = subtotal + tax_amount
-            monthly_payment = total_price / term_months if term_months > 0 else total_price
-            
-            # Generate quote ID
-            quote_id = f"VSC-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-            
-            # Build enhanced response
-            enhanced_response = {
-                'success': True,
-                'eligible': True,
-                'quote_id': quote_id,
-                'pricing_method': pricing_method,
-                'database_integration': True,
-                'vehicle_info': {
-                    'make': make.title(),
-                    'model': model.title() if model else 'Not Specified',
-                    'year': year,
-                    'mileage': mileage,
-                    'vehicle_class': vehicle_class,
-                    'age_years': datetime.now().year - year
-                },
-                'coverage_details': {
-                    'level': coverage_level.title(),
-                    'term_months': term_months,
-                    'term_years': round(term_months / 12, 1),
-                    'deductible': deductible,
-                    'customer_type': customer_type
-                },
-                'pricing_breakdown': {
-                    'base_calculation': round(calculated_price, 2),
-                    'admin_fee': round(admin_fee, 2),
-                    'subtotal': round(subtotal, 2),
-                    'tax_amount': round(tax_amount, 2),
-                    'total_price': round(total_price, 2),
-                    'monthly_payment': round(monthly_payment, 2)
-                },
-                'rating_factors': price_result.get('multipliers', {}),
-                'payment_options': {
-                    'full_payment': round(total_price, 2),
-                    'monthly_payment': round(monthly_payment, 2),
-                    'financing_available': True,
-                    'financing_terms': ['12 months 0% APR', '24 months 0% APR']
-                },
-                'quote_details': {
-                    'timestamp': datetime.now(timezone.utc).isoformat() + 'Z',
-                    'valid_until': (datetime.now(timezone.utc) + timedelta(days=30)).isoformat() + 'Z',
-                    'tax_rate': tax_rate,
-                    'currency': 'USD'
-                }
-            }
-            
-            # Enhance response with VIN information if available
-            if vin:
-                enhanced_response['vin_info'] = {
-                    'vin': vin,
-                    'auto_populated': data.get('auto_populated', False),
-                    'vin_decoded': data.get('vin_decoded', {})
-                }
-            
-            return jsonify(success_response(enhanced_response))
-            
-        except Exception as calc_error:
-            # Fallback to legacy VSC service if database calculation fails
-            print(f"Database calculation failed, using fallback: {calc_error}")
-            
-            response = vsc_service.generate_quote(
-                make=make,
-                model=model,
-                year=year,
-                mileage=mileage,
-                coverage_level=coverage_level,
-                term_months=term_months,
-                deductible=deductible,
-                customer_type=customer_type
-            )
-
-            response_data = response if isinstance(response, dict) else response[0] if isinstance(response, list) else response
-
-            # Handle ineligible vehicles with client's message
-            if not response_data.get('eligible', True):
-                ineligible_response = {
-                    'success': False,
-                    'eligible': False,
-                    'message': response_data.get('message', "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote"),
-                    'vehicle_info': response_data.get('vehicle_info', {}),
-                    'eligibility_details': response_data.get('eligibility_details', {}),
-                    'eligibility_requirements': {
-                        'max_age': '20 model years or newer',
-                        'max_mileage': 'Less than 200,000 miles'
+        # Use database-driven VSC price calculation
+        if VSC_PRICING_AVAILABLE:
+            try:
+                price_result = calculate_vsc_price(
+                    make=make,
+                    year=year,
+                    mileage=mileage,
+                    coverage_level=coverage_level,
+                    term_months=term_months,
+                    deductible=deductible,
+                    customer_type=customer_type
+                )
+                
+                if not price_result.get('success'):
+                    # Handle ineligible vehicles
+                    if not price_result.get('eligible', True):
+                        ineligible_response = {
+                            'success': False,
+                            'eligible': False,
+                            'message': "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote",
+                            'vehicle_info': price_result.get('vehicle_info', {}),
+                            'eligibility_details': price_result.get('eligibility_details', {}),
+                            'eligibility_requirements': {
+                                'max_age': '20 model years or newer',
+                                'max_mileage': 'Less than 200,000 miles'
+                            }
+                        }
+                        
+                        if vin:
+                            ineligible_response['vin_info'] = {
+                                'vin': vin,
+                                'auto_populated': data.get('auto_populated', False),
+                                'vin_decoded': data.get('vin_decoded', {})
+                            }
+                        
+                        return jsonify(ineligible_response), 400
+                    
+                    return jsonify({"error": price_result.get('error', 'Price calculation failed')}), 400
+                
+                # Get dynamic fees and tax rates from database
+                if settings_service.connection_available:
+                    admin_fee = get_admin_fee('vsc')
+                    tax_rate = get_tax_rate(data.get('state', 'FL'))  # Use dynamic state
+                    processing_fee = get_processing_fee()
+                    dealer_fee = get_dealer_fee()
+                    fee_source = 'database'
+                else:
+                    # Fallback values
+                    admin_fee = 50.00
+                    tax_rate = 0.07
+                    processing_fee = 15.00
+                    dealer_fee = 50.00
+                    fee_source = 'hardcoded_fallback'
+                
+                # Calculate final pricing
+                base_price = price_result['calculated_price']
+                subtotal = base_price + admin_fee
+                tax_amount = subtotal * tax_rate
+                total_price = subtotal + tax_amount
+                monthly_payment = total_price / term_months if term_months > 0 else total_price
+                
+                # Generate quote ID
+                quote_id = f"VSC-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+                
+                # Build comprehensive response
+                quote_response = {
+                    'success': True,
+                    'eligible': True,
+                    'quote_id': quote_id,
+                    'pricing_method': price_result.get('pricing_method', 'calculated'),
+                    'database_integration': True,
+                    'database_settings_used': settings_service.connection_available,
+                    
+                    # Vehicle information
+                    'vehicle_info': {
+                        'make': make.title(),
+                        'model': model.title() if model else 'Not Specified',
+                        'year': year,
+                        'mileage': mileage,
+                        'vehicle_class': price_result.get('vehicle_info', {}).get('vehicle_class', 'B'),
+                        'age_years': datetime.now().year - year
+                    },
+                    
+                    # Coverage details
+                    'coverage_details': {
+                        'level': coverage_level.title(),
+                        'term_months': term_months,
+                        'term_years': round(term_months / 12, 1),
+                        'deductible': deductible,
+                        'customer_type': customer_type.title()
+                    },
+                    
+                    # Pricing breakdown
+                    'pricing_breakdown': {
+                        'base_calculation': round(base_price, 2),
+                        'admin_fee': round(admin_fee, 2),
+                        'subtotal': round(subtotal, 2),
+                        'tax_amount': round(tax_amount, 2),
+                        'total_price': round(total_price, 2),
+                        'monthly_payment': round(monthly_payment, 2)
+                    },
+                    
+                    # Fee sources and multipliers
+                    'fee_sources': {
+                        'admin_fee_source': fee_source,
+                        'tax_rate_source': fee_source,
+                        'processing_fee': round(processing_fee, 2),
+                        'dealer_fee': round(dealer_fee, 2)
+                    },
+                    'rating_factors': price_result.get('multipliers', {}),
+                    
+                    # Payment and financing options
+                    'payment_options': {
+                        'full_payment': round(total_price, 2),
+                        'monthly_payment': round(monthly_payment, 2),
+                        'financing_available': True,
+                        'financing_terms': ['12 months 0% APR', '24 months 0% APR']
+                    },
+                    
+                    # Quote metadata
+                    'quote_details': {
+                        'timestamp': datetime.now(timezone.utc).isoformat() + 'Z',
+                        'valid_until': (datetime.now(timezone.utc) + timedelta(days=30)).isoformat() + 'Z',
+                        'tax_rate': tax_rate,
+                        'currency': 'USD'
                     }
                 }
                 
+                # Add VIN information if available
                 if vin:
-                    ineligible_response['vin_info'] = {
+                    quote_response['vin_info'] = {
                         'vin': vin,
                         'auto_populated': data.get('auto_populated', False),
                         'vin_decoded': data.get('vin_decoded', {})
                     }
                 
-                return jsonify(ineligible_response), 400
-
-            # Handle successful quotes
-            if response_data.get('success'):
-                # Enhance response with VIN information if available
-                if vin:
-                    response_data['vin_info'] = {
-                        'vin': vin,
-                        'auto_populated': data.get('auto_populated', False),
-                        'vin_decoded': data.get('vin_decoded', {})
-                    }
+                return jsonify(success_response(quote_response))
                 
-                response_data['pricing_method'] = 'fallback_service'
-                response_data['database_integration'] = False
-
-                return jsonify(success_response(response_data))
-            else:
-                return jsonify({"error": response_data.get('error', 'VSC quote generation failed')}), 400
+            except Exception as calc_error:
+                print(f"Database VSC calculation failed: {calc_error}")
+                return jsonify({"error": f"VSC price calculation error: {str(calc_error)}"}), 500
+        
+        else:
+            return jsonify({"error": "VSC pricing system not available"}), 503
 
     except Exception as e:
         return jsonify({"error": f"VSC quote error: {str(e)}"}), 500
@@ -1077,67 +1111,45 @@ def generate_vsc_quote_from_vin():
         if not data:
             return jsonify(error_response("Quote data is required")), 400
 
+        # Validate required fields
         vin = data.get('vin', '').strip().upper()
         if not vin:
             return jsonify(error_response("VIN is required for VIN-based quoting")), 400
 
         mileage = data.get('mileage')
-        coverage_level = data.get('coverage_level', 'gold')
-        term_months = data.get('term_months', 36)
-        customer_type = data.get('customer_type', 'retail')
-        deductible = data.get('deductible', 100)
-
         if not mileage:
             return jsonify(error_response("Mileage is required")), 400
 
+        # Parse optional parameters
+        coverage_level = data.get('coverage_level', 'gold').lower()
+        term_months = int(data.get('term_months', 36))
+        customer_type = data.get('customer_type', 'retail').lower()
+        deductible = int(data.get('deductible', 100))
+
         try:
             mileage = int(mileage)
-            term_months = int(term_months)
-            deductible = int(deductible)
         except (ValueError, TypeError):
-            return jsonify(error_response("Invalid numeric values provided")), 400
+            return jsonify(error_response("Invalid mileage value provided")), 400
 
-        # Use the enhanced VIN-based quote method if available
-        if enhanced_vin_available and hasattr(vsc_service, 'generate_quote_from_vin'):
-            quote_result = vsc_service.generate_quote_from_vin(
-                vin=vin,
-                mileage=mileage,
-                coverage_level=coverage_level,
-                term_months=term_months,
-                deductible=deductible,
-                customer_type=customer_type
-            )
-
-            # Handle ineligible vehicles
-            if not quote_result.get('eligible', True):
-                return jsonify(error_response(
-                    quote_result.get('message', 
-                    "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote")
-                )), 400
-
-            if quote_result.get('success'):
-                # Add database integration flag
-                quote_result['database_integration'] = True
-                return jsonify(success_response(quote_result))
-            else:
-                return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
-
+        # Decode VIN to get vehicle information
+        if enhanced_vin_available:
+            vin_result = enhanced_vin_service.decode_vin(vin)
         else:
-            # Fallback method - decode VIN then use database calculation
-            if enhanced_vin_available:
-                vin_result = enhanced_vin_service.decode_vin(vin)
-            else:
-                vin_result = vin_service.decode_vin(vin)
+            return jsonify(error_response("VIN decoding service not available")), 503
 
-            if not vin_result.get('success'):
-                return jsonify(error_response("Failed to decode VIN")), 400
+        if not vin_result.get('success'):
+            return jsonify(error_response("Failed to decode VIN")), 400
 
-            vehicle_info = vin_result.get('vehicle_info', {})
-            make = vehicle_info.get('make', '')
-            model = vehicle_info.get('model', '')
-            year = vehicle_info.get('year', 0)
+        vehicle_info = vin_result.get('vehicle_info', {})
+        make = vehicle_info.get('make', '')
+        model = vehicle_info.get('model', '')
+        year = vehicle_info.get('year', 0)
 
-            # Use database-driven price calculation
+        if not make or not year:
+            return jsonify(error_response("Could not extract vehicle make/year from VIN")), 400
+
+        # Use database-driven VSC price calculation
+        if VSC_PRICING_AVAILABLE:
             try:
                 price_result = calculate_vsc_price(
                     make=make,
@@ -1150,61 +1162,91 @@ def generate_vsc_quote_from_vin():
                 )
                 
                 if not price_result.get('success'):
-                    # Check if it's an eligibility issue
-                    error_msg = price_result.get('error', '')
-                    if 'qualify' in error_msg.lower() or 'eligible' in error_msg.lower():
+                    # Handle eligibility issues
+                    if not price_result.get('eligible', True):
                         return jsonify(error_response(
                             "Vehicle doesn't qualify. Make sure you entered the correct current mileage. Vehicle must be 20 model years or newer and less than 200,000 miles at time of quote"
                         )), 400
                     else:
-                        return jsonify(error_response(f"Price calculation failed: {error_msg}")), 400
+                        return jsonify(error_response(f"Price calculation failed: {price_result.get('error', 'Unknown error')}")), 400
                 
-                # Build comprehensive quote response
-                admin_fee = 50.00
-                tax_rate = 0.07
-                calculated_price = price_result.get('calculated_price', 0)
+                # Get dynamic fees from database
+                if settings_service.connection_available:
+                    admin_fee = get_admin_fee('vsc')
+                    tax_rate = get_tax_rate('FL')
+                    processing_fee = get_processing_fee()
+                    dealer_fee = get_dealer_fee()
+                    fee_source = 'database'
+                else:
+                    admin_fee = 50.00
+                    tax_rate = 0.07
+                    processing_fee = 15.00
+                    dealer_fee = 50.00
+                    fee_source = 'hardcoded_fallback'
                 
-                subtotal = calculated_price + admin_fee
+                # Calculate final pricing
+                base_price = price_result['calculated_price']
+                subtotal = base_price + admin_fee
                 tax_amount = subtotal * tax_rate
                 total_price = subtotal + tax_amount
                 monthly_payment = total_price / term_months if term_months > 0 else total_price
                 
+                # Build comprehensive quote response
                 quote_data = {
                     'success': True,
                     'eligible': True,
                     'quote_id': f"VSC-VIN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
                     'pricing_method': price_result.get('pricing_method', 'database_calculated'),
                     'database_integration': True,
+                    'database_settings_used': settings_service.connection_available,
+                    
+                    # Vehicle information from VIN
                     'vehicle_info': {
-                        'make': make,
-                        'model': model,
+                        'make': make.title(),
+                        'model': model.title() if model else 'Not Specified',
                         'year': year,
                         'mileage': mileage,
-                        'vehicle_class': price_result.get('vehicle_class', 'B'),
+                        'vehicle_class': price_result.get('vehicle_info', {}).get('vehicle_class', 'B'),
                         'age_years': datetime.now().year - year
                     },
+                    
+                    # Coverage details
                     'coverage_details': {
                         'level': coverage_level.title(),
                         'term_months': term_months,
                         'term_years': round(term_months / 12, 1),
                         'deductible': deductible,
-                        'customer_type': customer_type
+                        'customer_type': customer_type.title()
                     },
+                    
+                    # Pricing breakdown  
                     'pricing_breakdown': {
-                        'base_calculation': round(calculated_price, 2),
+                        'base_calculation': round(base_price, 2),
                         'admin_fee': round(admin_fee, 2),
                         'subtotal': round(subtotal, 2),
                         'tax_amount': round(tax_amount, 2),
                         'total_price': round(total_price, 2),
                         'monthly_payment': round(monthly_payment, 2)
                     },
+                    
+                    # Fee sources
+                    'fee_sources': {
+                        'admin_fee_source': fee_source,
+                        'tax_rate_source': fee_source,
+                        'processing_fee': round(processing_fee, 2),
+                        'dealer_fee': round(dealer_fee, 2)
+                    },
                     'rating_factors': price_result.get('multipliers', {}),
+                    
+                    # VIN-specific information
                     'vin_info': {
                         'vin': vin,
                         'vehicle_info': vehicle_info,
                         'auto_populated': True,
                         'decode_method': vehicle_info.get('decode_method', 'enhanced')
                     },
+                    
+                    # Quote metadata
                     'quote_details': {
                         'timestamp': datetime.now(timezone.utc).isoformat() + 'Z',
                         'valid_until': (datetime.now(timezone.utc) + timedelta(days=30)).isoformat() + 'Z',
@@ -1217,32 +1259,13 @@ def generate_vsc_quote_from_vin():
                 
             except Exception as db_error:
                 print(f"Database calculation failed for VIN quote: {db_error}")
-                
-                # Final fallback to legacy service
-                quote_result = vsc_service.generate_quote(
-                    make=make, model=model, year=year, mileage=mileage,
-                    coverage_level=coverage_level, term_months=term_months,
-                    deductible=deductible, customer_type=customer_type
-                )
-
-                if quote_result.get('success'):
-                    # Enhance quote with VIN information
-                    quote_result['vin_info'] = {
-                        'vin': vin,
-                        'vehicle_info': vehicle_info,
-                        'auto_populated': True,
-                        'decode_method': vehicle_info.get('decode_method', 'enhanced')
-                    }
-                    quote_result['pricing_method'] = 'fallback_service'
-                    quote_result['database_integration'] = False
-
-                    return jsonify(success_response(quote_result))
-                else:
-                    return jsonify(error_response(quote_result.get('error', 'Quote generation failed'))), 400
+                return jsonify(error_response(f"VSC calculation error: {str(db_error)}")), 500
+        
+        else:
+            return jsonify(error_response("VSC pricing system not available")), 503
 
     except Exception as e:
         return jsonify(error_response(f"VIN quote generation error: {str(e)}")), 500
-
 
 @app.route('/api/vsc/database/status', methods=['GET'])
 def get_vsc_database_status():
@@ -2170,63 +2193,243 @@ def generate_pricing_quote():
 @token_required
 @role_required('admin')
 def update_product_pricing(product_code):
-    """Update product pricing in database (admin only)"""
+    """Update product pricing with database-driven calculations"""
     try:
         data = request.get_json()
+        if not data:
+            return jsonify(error_response("Pricing data is required")), 400
 
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
 
-        # Check if product exists
-        cursor.execute(
-            'SELECT id FROM products WHERE product_code = %s;', (product_code,))
-        if not cursor.fetchone():
-            cursor.close()
-            conn.close()
-            return jsonify(error_response('Product not found')), 404
+        # Verify product exists
+        cursor.execute("SELECT id, base_price FROM products WHERE product_code = %s;", (product_code,))
+        product_result = cursor.fetchone()
+        if not product_result:
+            return jsonify(error_response("Product not found")), 404
+
+        product_id, current_base_price = product_result
 
         # Update base price if provided
-        if 'base_price' in data:
+        new_base_price = data.get('base_price', current_base_price)
+        if new_base_price != current_base_price:
             cursor.execute('''
                 UPDATE products 
-                SET base_price = %s 
+                SET base_price = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE product_code = %s;
-            ''', (data['base_price'], product_code))
+            ''', (new_base_price, product_code))
 
-        # Update pricing multipliers if provided
+        # Update pricing multipliers
         if 'pricing' in data:
-            for term_years, pricing_info in data['pricing'].items():
+            for term_years, customer_prices in data['pricing'].items():
                 term = int(term_years)
-                multiplier = pricing_info.get('multiplier', pricing_info)
-
-                # Update retail pricing
-                cursor.execute('''
-                    INSERT INTO pricing (product_code, term_years, multiplier, customer_type) 
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (product_code, term_years, customer_type) 
-                    DO UPDATE SET multiplier = %s;
-                ''', (product_code, term, multiplier, 'retail', multiplier))
-
-                # Update wholesale pricing (15% discount)
-                wholesale_multiplier = multiplier * 0.85
-                cursor.execute('''
-                    INSERT INTO pricing (product_code, term_years, multiplier, customer_type) 
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (product_code, term_years, customer_type) 
-                    DO UPDATE SET multiplier = %s;
-                ''', (product_code, term, wholesale_multiplier, 'wholesale', wholesale_multiplier))
+                
+                for customer_type, multiplier in customer_prices.items():
+                    cursor.execute('''
+                        INSERT INTO pricing (product_code, term_years, multiplier, customer_type)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (product_code, term_years, customer_type)
+                        DO UPDATE SET 
+                            multiplier = EXCLUDED.multiplier,
+                            updated_at = CURRENT_TIMESTAMP;
+                    ''', (product_code, term, float(multiplier), customer_type))
 
         conn.commit()
         cursor.close()
         conn.close()
 
         return jsonify(success_response({
-            'message': f'Pricing updated for {product_code}',
-            'updated_data': data
+            'message': 'Pricing updated successfully',
+            'product_code': product_code,
+            'base_price': float(new_base_price)
         }))
 
     except Exception as e:
+        print(f"Update pricing error: {str(e)}")
+        if 'conn' in locals():
+            conn.rollback()
         return jsonify(error_response(f"Failed to update pricing: {str(e)}")), 500
+
+
+@app.route('/api/admin/pricing/calculate', methods=['POST'])
+@token_required
+@role_required('admin')
+def calculate_pricing_preview():
+    """Calculate pricing preview with database-driven fees and taxes"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify(error_response("Calculation data is required")), 400
+
+        base_price = float(data.get('base_price', 0))
+        term_years = int(data.get('term_years', 1))
+        customer_type = data.get('customer_type', 'retail')
+        state = data.get('state', 'FL')
+
+        # Get dynamic settings from database
+        if settings_service.connection_available:
+            admin_fee = get_admin_fee('hero')
+            wholesale_discount_rate = get_wholesale_discount()
+            tax_rate = get_tax_rate(state)
+            processing_fee = get_processing_fee()
+        else:
+            admin_fee = 25.00
+            wholesale_discount_rate = 0.15
+            tax_rate = 0.08
+            processing_fee = 15.00
+
+        # Apply customer type discount
+        if customer_type == 'wholesale':
+            discounted_price = base_price * (1 - wholesale_discount_rate)
+            discount_amount = base_price - discounted_price
+        else:
+            discounted_price = base_price
+            discount_amount = 0
+
+        # Calculate final pricing
+        subtotal = discounted_price + admin_fee
+        tax_amount = subtotal * tax_rate
+        total_price = subtotal + tax_amount
+        monthly_payment = total_price / (term_years * 12)
+
+        return jsonify(success_response({
+            'calculation': {
+                'base_price': round(base_price, 2),
+                'discount_rate': wholesale_discount_rate if customer_type == 'wholesale' else 0,
+                'discount_amount': round(discount_amount, 2),
+                'discounted_price': round(discounted_price, 2),
+                'admin_fee': round(admin_fee, 2),
+                'subtotal': round(subtotal, 2),
+                'tax_rate': tax_rate,
+                'tax_amount': round(tax_amount, 2),
+                'total_price': round(total_price, 2),
+                'monthly_payment': round(monthly_payment, 2),
+                'term_years': term_years,
+                'customer_type': customer_type
+            },
+            'settings_used': {
+                'admin_fee_source': 'database' if settings_service.connection_available else 'fallback',
+                'tax_rate_source': 'database' if settings_service.connection_available else 'fallback',
+                'discount_source': 'database' if settings_service.connection_available else 'fallback',
+                'state': state
+            }
+        }))
+
+    except Exception as e:
+        print(f"Calculate pricing error: {str(e)}")
+        return jsonify(error_response(f"Failed to calculate pricing: {str(e)}")), 500
+
+
+@app.route('/api/admin/hero/test-quote', methods=['POST'])
+@token_required
+@role_required('admin')
+def test_hero_quote():
+    """Test Hero quote generation with current database settings"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify(error_response("Quote test data is required")), 400
+
+        if not HERO_SERVICE_AVAILABLE:
+            return jsonify(error_response("Hero service not available")), 503
+
+        # Create Hero service instance (uses database settings)
+        hero_service = HeroRatingService()
+
+        # Generate test quote
+        quote_result = hero_service.generate_quote(
+            product_type=data.get('product_type', 'home_protection'),
+            term_years=data.get('term_years', 1),
+            coverage_limit=data.get('coverage_limit', 500),
+            customer_type=data.get('customer_type', 'retail'),
+            state=data.get('state', 'FL'),
+            zip_code=data.get('zip_code', '33101')
+        )
+
+        if quote_result.get('success'):
+            # Add test metadata
+            quote_result['test_quote'] = True
+            quote_result['test_timestamp'] = datetime.utcnow().isoformat() + 'Z'
+            quote_result['database_settings_used'] = settings_service.connection_available
+
+            return jsonify(success_response(quote_result))
+        else:
+            return jsonify(error_response(quote_result.get('error', 'Quote generation failed')), 400)
+
+    except Exception as e:
+        print(f"Test quote error: {str(e)}")
+        return jsonify(error_response(f"Failed to generate test quote: {str(e)}")), 500
+
+
+@app.route('/api/admin/system-settings', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_system_settings_for_products():
+    """Get current system settings for product management"""
+    try:
+        if settings_service.connection_available:
+            # Get all relevant settings for product management
+            settings = {
+                'fees': {
+                    'admin_fee': get_admin_fee('hero'),
+                    'vsc_admin_fee': get_admin_fee('vsc'),
+                    'processing_fee': get_processing_fee()
+                },
+                'discounts': {
+                    'wholesale_discount_rate': get_wholesale_discount()
+                },
+                'taxes': {
+                    'default_tax_rate': get_tax_rate(),
+                    'fl_tax_rate': get_tax_rate('FL'),
+                    'ca_tax_rate': get_tax_rate('CA'),
+                    'ny_tax_rate': get_tax_rate('NY'),
+                    'tx_tax_rate': get_tax_rate('TX')
+                },
+                'hero_settings': {}
+            }
+
+            # Get Hero-specific settings if available
+            if settings_service:
+                settings_service.clear_cache()
+                settings['hero_settings'] = {
+                    'coverage_multiplier_1000': settings_service.get_admin_setting('hero', 'coverage_multiplier_1000', 1.2),
+                    'coverage_multiplier_500': settings_service.get_admin_setting('hero', 'coverage_multiplier_500', 1.0),
+                    'default_coverage_limit': settings_service.get_admin_setting('hero', 'default_coverage_limit', 500)
+                }
+        else:
+            # Fallback settings
+            settings = {
+                'fees': {
+                    'admin_fee': 25.00,
+                    'vsc_admin_fee': 50.00,
+                    'processing_fee': 15.00
+                },
+                'discounts': {
+                    'wholesale_discount_rate': 0.15
+                },
+                'taxes': {
+                    'default_tax_rate': 0.08,
+                    'fl_tax_rate': 0.07,
+                    'ca_tax_rate': 0.0875,
+                    'ny_tax_rate': 0.08,
+                    'tx_tax_rate': 0.0625
+                },
+                'hero_settings': {
+                    'coverage_multiplier_1000': 1.2,
+                    'coverage_multiplier_500': 1.0,
+                    'default_coverage_limit': 500
+                }
+            }
+
+        return jsonify(success_response({
+            'settings': settings,
+            'database_driven': settings_service.connection_available,
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }))
+
+    except Exception as e:
+        print(f"Get system settings error: {str(e)}")
+        return jsonify(error_response(f"Failed to get system settings: {str(e)}")), 500
 
 
 @app.route('/api/admin/products', methods=['POST'])
@@ -2306,13 +2509,13 @@ def create_product():
 @app.route('/api/admin/products', methods=['GET'])
 @token_required
 @role_required('admin')
-def get_all_admin_products():
-    """Get all products with complete pricing data for admin management"""
+def get_admin_products():
+    """Get all products with database-driven pricing info"""
     try:
         conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor = conn.cursor()
 
-        # Get products with their complete pricing data
+        # Get products with pricing information
         cursor.execute('''
             SELECT 
                 p.id,
@@ -2321,104 +2524,70 @@ def get_all_admin_products():
                 p.base_price,
                 p.active,
                 p.created_at,
-                -- Get retail pricing as JSON
-                COALESCE(
-                    JSON_OBJECT_AGG(
-                        pr.term_years::text, 
-                        JSON_BUILD_OBJECT(
-                            'price', ROUND(p.base_price * pr.multiplier, 2),
-                            'base_price', p.base_price,
-                            'multiplier', pr.multiplier,
-                            'term_years', pr.term_years
-                        )
-                    ) FILTER (WHERE pr.customer_type = 'retail'),
-                    '{}'::json
-                ) as pricing,
-                -- Get available terms
-                COALESCE(
-                    ARRAY_AGG(DISTINCT pr.term_years ORDER BY pr.term_years) 
-                    FILTER (WHERE pr.customer_type = 'retail'),
-                    ARRAY[]::integer[]
-                ) as terms_available,
-                -- Calculate min/max prices for retail
-                COALESCE(
-                    MIN(ROUND(p.base_price * pr.multiplier, 2)) 
-                    FILTER (WHERE pr.customer_type = 'retail'),
-                    p.base_price
-                ) as min_price,
-                COALESCE(
-                    MAX(ROUND(p.base_price * pr.multiplier, 2)) 
-                    FILTER (WHERE pr.customer_type = 'retail'),
-                    p.base_price
-                ) as max_price,
-                COUNT(pr.id) as pricing_count
+                COUNT(pr.id) as pricing_count,
+                MIN(p.base_price * pr.multiplier) as min_price,
+                MAX(p.base_price * pr.multiplier) as max_price,
+                ARRAY_AGG(DISTINCT pr.term_years ORDER BY pr.term_years) as terms_available
             FROM products p
             LEFT JOIN pricing pr ON p.product_code = pr.product_code
-            WHERE p.active = true
             GROUP BY p.id, p.product_code, p.product_name, p.base_price, p.active, p.created_at
-            ORDER BY p.created_at DESC;
+            ORDER BY p.product_name;
         ''')
 
-        products = cursor.fetchall()
+        products = []
+        for row in cursor.fetchall():
+            id, product_code, product_name, base_price, active, created_at, pricing_count, min_price, max_price, terms = row
+            
+            products.append({
+                'id': id,
+                'product_code': product_code,
+                'product_name': product_name,
+                'base_price': float(base_price) if base_price else 0,
+                'min_price': float(min_price) if min_price else 0,
+                'max_price': float(max_price) if max_price else 0,
+                'active': active,
+                'created_at': created_at.isoformat() if created_at else None,
+                'pricing_count': pricing_count,
+                'terms_available': [t for t in terms if t is not None] if terms else []
+            })
 
-        # Convert to proper format for frontend
-        processed_products = []
-        for product in products:
-            # Convert to dict and handle data types
-            product_dict = dict(product)
-            product_dict['base_price'] = float(product_dict['base_price'])
-            product_dict['min_price'] = float(product_dict['min_price'])
-            product_dict['max_price'] = float(product_dict['max_price'])
-
-            # Convert pricing values to floats
-            if product_dict['pricing']:
-                for term, pricing_info in product_dict['pricing'].items():
-                    pricing_info['price'] = float(pricing_info['price'])
-                    pricing_info['base_price'] = float(
-                        pricing_info['base_price'])
-                    pricing_info['multiplier'] = float(
-                        pricing_info['multiplier'])
-
-            # Add product_type for compatibility
-            code_to_type_mapping = {
-                'HOME_PROTECTION_PLAN': 'home_protection',
-                'COMPREHENSIVE_AUTO_PROTECTION': 'comprehensive_auto_protection',
-                'HOME_DEDUCTIBLE_REIMBURSEMENT': 'home_deductible_reimbursement',
-                'AUTO_ADVANTAGE_DEDUCTIBLE_REIMBURSEMENT': 'auto_advantage_deductible_reimbursement',
-                'MULTI_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'multi_vehicle_deductible_reimbursement',
-                'ALL_VEHICLE_DEDUCTIBLE_REIMBURSEMENT': 'all_vehicle_deductible_reimbursement',
-                'AUTO_RV_DEDUCTIBLE_REIMBURSEMENT': 'auto_rv_deductible_reimbursement',
-                'HERO_LEVEL_HOME_PROTECTION': 'hero_level_protection_home'
+        # Get current system settings for frontend
+        if settings_service.connection_available:
+            system_settings = {
+                'hero_admin_fee': get_admin_fee('hero'),
+                'wholesale_discount_rate': get_wholesale_discount(),
+                'default_tax_rate': get_tax_rate(),
+                'fl_tax_rate': get_tax_rate('FL'),
+                'ca_tax_rate': get_tax_rate('CA'),
+                'ny_tax_rate': get_tax_rate('NY'),
+                'processing_fee': get_processing_fee(),
+                'database_driven': True
             }
-
-            product_dict['product_type'] = code_to_type_mapping.get(
-                product_dict['product_code'],
-                product_dict['product_code'].lower()
-            )
-
-            processed_products.append(product_dict)
+        else:
+            system_settings = {
+                'hero_admin_fee': 25.00,
+                'wholesale_discount_rate': 0.15,
+                'default_tax_rate': 0.08,
+                'fl_tax_rate': 0.07,
+                'ca_tax_rate': 0.0875,
+                'ny_tax_rate': 0.08,
+                'processing_fee': 15.00,
+                'database_driven': False
+            }
 
         cursor.close()
         conn.close()
 
-        response_data = {
-            'success': True,
-            'data': {
-                'products': processed_products,
-                'total': len(processed_products),
-                'data_source': 'database'
-            },
-            'timestamp': datetime.now(timezone.utc).isoformat() + 'Z'
-        }
-
-        return jsonify(response_data), 200
+        return jsonify(success_response({
+            'products': products,
+            'system_settings': system_settings,
+            'total_products': len(products)
+        }))
 
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': datetime.now(timezone.utc).isoformat() + 'Z'
-        }), 500
+        print(f"Get products error: {str(e)}")
+        return jsonify(error_response(f"Failed to get products: {str(e)}")), 500
+
 
 
 @app.route('/api/admin/products/<product_code>', methods=['DELETE'])
@@ -5457,7 +5626,6 @@ def update_product_by_code(product_code):
         conn.commit()
         cursor.close()
         conn.close()
-        
         return jsonify(success_response({
             'message': f'Product {product_code} updated successfully',
             'product': {
@@ -5510,64 +5678,75 @@ def delete_product_by_code(product_code):
 @app.route('/api/admin/products/<product_code>/pricing', methods=['GET'])
 @token_required
 @role_required('admin')
-def get_product_pricing_details(product_code):
-    """Get detailed pricing information for a specific product"""
+def get_admin_product_pricing(product_code):
+    """Get detailed pricing for a specific product with current system settings"""
     try:
         conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Get product info
+        cursor = conn.cursor()
+
+        # Get product base info
         cursor.execute('''
-            SELECT product_code, product_name, base_price 
+            SELECT product_name, base_price, active
             FROM products 
             WHERE product_code = %s;
         ''', (product_code,))
         
-        product = cursor.fetchone()
-        if not product:
-            cursor.close()
-            conn.close()
-            return jsonify(error_response('Product not found')), 404
-        
-        # Get all pricing for this product
+        product_result = cursor.fetchone()
+        if not product_result:
+            return jsonify(error_response("Product not found")), 404
+
+        product_name, base_price, active = product_result
+
+        # Get pricing data
         cursor.execute('''
-            SELECT term_years, customer_type, multiplier,
-                   ROUND(p.base_price * pr.multiplier, 2) as calculated_price
-            FROM pricing pr
-            JOIN products p ON p.product_code = pr.product_code
-            WHERE pr.product_code = %s
+            SELECT term_years, multiplier, customer_type
+            FROM pricing 
+            WHERE product_code = %s
             ORDER BY term_years, customer_type;
         ''', (product_code,))
-        
-        pricing_rows = cursor.fetchall()
+
+        pricing_data = {}
+        for term_years, multiplier, customer_type in cursor.fetchall():
+            if term_years not in pricing_data:
+                pricing_data[term_years] = {}
+            pricing_data[term_years][customer_type] = {
+                'multiplier': float(multiplier),
+                'price': float(base_price * multiplier)
+            }
+
+        # Get current system settings
+        if settings_service.connection_available:
+            system_settings = {
+                'admin_fee': get_admin_fee('hero'),
+                'wholesale_discount_rate': get_wholesale_discount(),
+                'tax_rate': get_tax_rate(),
+                'processing_fee': get_processing_fee(),
+                'database_driven': True
+            }
+        else:
+            system_settings = {
+                'admin_fee': 25.00,
+                'wholesale_discount_rate': 0.15,
+                'tax_rate': 0.08,
+                'processing_fee': 15.00,
+                'database_driven': False
+            }
+
         cursor.close()
         conn.close()
-        
-        # Organize pricing by term and customer type
-        pricing_structure = {}
-        for row in pricing_rows:
-            term = row['term_years']
-            customer_type = row['customer_type']
-            
-            if term not in pricing_structure:
-                pricing_structure[term] = {}
-            
-            pricing_structure[term][customer_type] = {
-                'multiplier': float(row['multiplier']),
-                'calculated_price': float(row['calculated_price'])
-            }
-        
+
         return jsonify(success_response({
-            'product_code': product['product_code'],
-            'product_name': product['product_name'],
-            'base_price': float(product['base_price']),
-            'pricing_structure': pricing_structure,
-            'available_terms': sorted(list(set(row['term_years'] for row in pricing_rows))),
-            'customer_types': sorted(list(set(row['customer_type'] for row in pricing_rows)))
+            'product_code': product_code,
+            'product_name': product_name,
+            'base_price': float(base_price),
+            'active': active,
+            'pricing': pricing_data,
+            'system_settings': system_settings
         }))
-        
+
     except Exception as e:
-        return jsonify(error_response(f"Failed to get product pricing: {str(e)}")), 500
+        print(f"Get pricing error: {str(e)}")
+        return jsonify(error_response(f"Failed to get pricing: {str(e)}")), 500
 
 
 @app.route('/api/admin/products/<product_code>/pricing/bulk', methods=['PUT'])
