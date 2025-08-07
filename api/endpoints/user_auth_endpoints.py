@@ -7,7 +7,6 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone
 import uuid
 from utils.database import get_db_manager, execute_query
-from utils.response_helpers import success_response, error_response
 
 # Initialize blueprint
 user_auth_bp = Blueprint('user_auth', __name__)
@@ -154,7 +153,7 @@ def register():
         required_fields = ['email', 'password', 'role']
         for field in required_fields:
             if not data.get(field):
-                return jsonify(error_response(f'{field} is required')), 400
+                return jsonify(f'{field} is required'), 400
 
         email = data.get('email').lower().strip()
         password = data.get('password')
@@ -162,7 +161,7 @@ def register():
 
         # Validate role
         if role not in ['customer', 'wholesale_reseller']:  # Admin created separately
-            return jsonify(error_response('Invalid role')), 400
+            return jsonify('Invalid role'), 400
 
         # Use DatabaseAuth to create user (this handles validation internally)
         user_data, error_msg = UserAuth.create_user(
@@ -173,7 +172,7 @@ def register():
         )
         
         if not user_data:
-            return jsonify(error_response(error_msg)), 400
+            return jsonify(error_msg), 400
 
         user_id = user_data['id']
 
@@ -227,7 +226,7 @@ def register():
         # Log security event
         SecurityUtils.log_security_event(user_id, 'user_registered', {'role': role})
 
-        return jsonify(success_response({
+        return jsonify({
             'message': 'User registered successfully',
             'user': {
                 'id': user_id,
@@ -236,10 +235,10 @@ def register():
                 'profile': data.get('profile', {})
             },
             'token': token
-        })), 201
+        }), 201
 
     except Exception as e:
-        return jsonify(error_response(f'Registration failed: {str(e)}')), 500
+        return jsonify(f'Registration failed: {str(e)}'), 500
 
 @user_auth_bp.route('/login', methods=['POST'])
 def login():
@@ -251,22 +250,22 @@ def login():
         password = data.get('password', '')
 
         if not email or not password:
-            return jsonify(error_response('Email and password are required')), 400
+            return jsonify('Email and password are required'), 400
 
         # Use DatabaseAuth to authenticate (this handles all the database logic)
         auth_result, error_msg = UserAuth.authenticate_user(email, password)
         
         if not auth_result:
-            return jsonify(error_response(error_msg or 'Invalid credentials')), 401
+            return jsonify(error_msg or 'Invalid credentials'), 401
 
-        return jsonify(success_response({
+        return jsonify({
             'message': 'Login successful',
             'user': auth_result['user'],
             'token': auth_result['token']
-        }))
+        })
 
     except Exception as e:
-        return jsonify(error_response(f'Login failed: {str(e)}')), 500
+        return jsonify(f'Login failed: {str(e)}'), 500
 
 @user_auth_bp.route('/logout', methods=['POST'])
 @token_required
@@ -275,9 +274,9 @@ def logout():
     try:
         user_id = request.current_user.get('user_id')
         SecurityUtils.log_security_event(user_id, 'logout', {})
-        return jsonify(success_response({'message': 'Logout successful'}))
+        return jsonify({'message': 'Logout successful'})
     except Exception as e:
-        return jsonify(error_response(f'Logout failed: {str(e)}')), 500
+        return jsonify(f'Logout failed: {str(e)}'), 500
 
 @user_auth_bp.route('/profile', methods=['GET'])
 @token_required
@@ -290,7 +289,7 @@ def get_profile():
         user_data = UserAuth.get_user_by_id(user_id)
         
         if not user_data:
-            return jsonify(error_response('User not found')), 404
+            return jsonify('User not found'), 404
 
         profile_data = {
             'user': {
@@ -319,10 +318,10 @@ def get_profile():
                 'tier': user_data['tier']
             }
 
-        return jsonify(success_response(profile_data))
+        return jsonify(profile_data)
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to get profile: {str(e)}')), 500
+        return jsonify(f'Failed to get profile: {str(e)}'), 500
 
 @user_auth_bp.route('/profile', methods=['PUT'])
 @token_required
@@ -333,11 +332,11 @@ def update_profile():
         data = request.get_json()
         
         if not data:
-            return jsonify(error_response('Profile data is required')), 400
+            return jsonify('Profile data is required'), 400
 
         db_manager = get_db_manager()
         if not db_manager.available:
-            return jsonify(error_response('Database not available')), 503
+            return jsonify('Database not available'), 503
 
         # Update user profile
         if 'profile' in data:
@@ -385,13 +384,13 @@ def update_profile():
             'fields_updated': list(data.keys())
         })
 
-        return jsonify(success_response({
+        return jsonify({
             'message': 'Profile updated successfully',
             'updated_fields': list(data.keys())
-        }))
+        })
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to update profile: {str(e)}')), 500
+        return jsonify(f'Failed to update profile: {str(e)}'), 500
 
 @user_auth_bp.route('/change-password', methods=['PUT'])
 @token_required
@@ -402,13 +401,13 @@ def change_password():
         data = request.get_json()
         
         if not data:
-            return jsonify(error_response('Password data is required')), 400
+            return jsonify('Password data is required'), 400
 
         current_password = data.get('current_password')
         new_password = data.get('new_password')
 
         if not current_password or not new_password:
-            return jsonify(error_response('Current and new password required')), 400
+            return jsonify('Current and new password required'), 400
 
         # Get current password hash from database
         user_result = execute_query(
@@ -418,19 +417,19 @@ def change_password():
         )
 
         if not user_result['success'] or not user_result['data']:
-            return jsonify(error_response('User not found')), 404
+            return jsonify('User not found'), 404
 
         # Verify current password using DatabaseAuth
         if not UserAuth.verify_password(current_password, user_result['data']['password_hash']):
             SecurityUtils.log_security_event(user_id, 'password_change_failed', {
                 'reason': 'invalid_current_password'
             })
-            return jsonify(error_response('Current password is incorrect')), 401
+            return jsonify('Current password is incorrect'), 401
 
         # Update password in database using DatabaseAuth
         db_manager = get_db_manager()
         if not db_manager.available:
-            return jsonify(error_response('Database not available')), 503
+            return jsonify('Database not available'), 503
 
         db_manager.update_record(
             'users',
@@ -443,10 +442,10 @@ def change_password():
         )
 
         SecurityUtils.log_security_event(user_id, 'password_changed', {})
-        return jsonify(success_response({'message': 'Password changed successfully'}))
+        return jsonify({'message': 'Password changed successfully'})
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to change password: {str(e)}')), 500
+        return jsonify(f'Failed to change password: {str(e)}'), 500
 
 @user_auth_bp.route('/verify-token', methods=['POST'])
 def verify_token():
@@ -461,25 +460,25 @@ def verify_token():
             if auth_header.startswith('Bearer '):
                 token = auth_header.split(' ')[1]
             else:
-                return jsonify(error_response('Token is required')), 400
+                return jsonify('Token is required'), 400
 
         # Use DatabaseAuth to verify token (this includes database validation)
         valid, result = UserAuth.verify_token(token)
         
         if not valid:
-            return jsonify(error_response(result)), 401
+            return jsonify(result), 401
 
-        return jsonify(success_response({
+        return jsonify({
             'valid': True,
             'user': {
                 'id': result['user_id'],
                 'email': result['email'],
                 'role': result['role']
             }
-        }))
+        })
 
     except Exception as e:
-        return jsonify(error_response(f'Token verification failed: {str(e)}')), 500
+        return jsonify(f'Token verification failed: {str(e)}'), 500
 
 @user_auth_bp.route('/health')
 def auth_health():
@@ -532,10 +531,10 @@ def get_active_sessions():
                     'login_count': user['login_count']
                 })
 
-        return jsonify(success_response({
+        return jsonify({
             'active_sessions': active_sessions,
             'total_sessions': len(active_sessions)
-        }))
+        })
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to get sessions: {str(e)}')), 500
+        return jsonify(f'Failed to get sessions: {str(e)}'), 500
