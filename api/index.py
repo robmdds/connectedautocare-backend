@@ -130,7 +130,9 @@ def register_blueprints(app):
         # Admin endpoints
         app.register_blueprint(admin_bp, url_prefix='/api/admin')
         app.register_blueprint(pricing_bp, url_prefix='/api/admin/pricing')
-        app.register_blueprint(analytics_bp, url_prefix='/api/admin/analytics')
+        
+        # Analytics endpoints
+        app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
         
         # Video endpoints - Admin routes
         app.register_blueprint(video_bp, url_prefix='/api/admin/video')
