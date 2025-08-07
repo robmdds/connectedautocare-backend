@@ -1,0 +1,3875 @@
+{
+  "database_info": {
+    "version": "PostgreSQL 17.5 on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+    "size": "9144 kB",
+    "current_schema": "public"
+  },
+  "connection_info": {
+    "host": "ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech",
+    "database": "neondb",
+    "user": "neondb_owner"
+  },
+  "summary": {
+    "total_tables": 22,
+    "total_views": 0,
+    "schemas": [
+      "public"
+    ]
+  },
+  "tables": {
+    "public.admin_settings": {
+      "schema": "public",
+      "table_name": "admin_settings",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('admin_settings_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "category",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "key",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "value",
+          "data_type": "jsonb",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "updated_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        }
+      ],
+      "indexes": [
+        {
+          "name": "admin_settings_pkey",
+          "definition": "CREATE UNIQUE INDEX admin_settings_pkey ON public.admin_settings USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "admin_settings_category_key_key",
+          "definition": "CREATE UNIQUE INDEX admin_settings_category_key_key ON public.admin_settings USING btree (category, key)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "updated_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "admin_settings_updated_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "admin_settings_category_key_key",
+          "type": "UNIQUE",
+          "column": "category",
+          "definition": null
+        },
+        {
+          "name": "admin_settings_category_key_key",
+          "type": "UNIQUE",
+          "column": "key",
+          "definition": null
+        },
+        {
+          "name": "2200_32926_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_32926_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "category IS NOT NULL"
+        },
+        {
+          "name": "2200_32926_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "key IS NOT NULL"
+        },
+        {
+          "name": "2200_32926_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "value IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 50,
+      "table_size": "96 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.customers": {
+      "schema": "public",
+      "table_name": "customers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "user_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "customer_type",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'individual'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "personal_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "business_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "contact_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "billing_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "preferences",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "tags",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": "'{}'::text[]",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "lifetime_value",
+          "data_type": "numeric",
+          "nullable": true,
+          "default": "0.00",
+          "max_length": null,
+          "precision": 12,
+          "scale": 2,
+          "position": 10
+        },
+        {
+          "name": "total_policies",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 11
+        },
+        {
+          "name": "active_policies",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 12
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "last_activity",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'active'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 16
+        },
+        {
+          "name": "notes",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'[]'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 17
+        },
+        {
+          "name": "assigned_agent",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 18
+        }
+      ],
+      "indexes": [
+        {
+          "name": "customers_pkey",
+          "definition": "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "user_id",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "customers_user_id_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "2200_32789_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 1,
+      "table_size": "32 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.dealers": {
+      "schema": "public",
+      "table_name": "dealers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "license_number",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "contact_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "pricing_overrides",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "volume_discounts",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'active'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        }
+      ],
+      "indexes": [
+        {
+          "name": "dealers_pkey",
+          "definition": "CREATE UNIQUE INDEX dealers_pkey ON public.dealers USING btree (id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "2200_40960_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_40960_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "name IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "16 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.policies": {
+      "schema": "public",
+      "table_name": "policies",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "policy_number",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "customer_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "product_type",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "product_details",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "coverage_details",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "pricing",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'active'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "effective_date",
+          "data_type": "date",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "expiration_date",
+          "data_type": "date",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "created_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "payment_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "claims",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'[]'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        },
+        {
+          "name": "documents",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'[]'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 16
+        },
+        {
+          "name": "notes",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'[]'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 17
+        },
+        {
+          "name": "renewal_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 18
+        }
+      ],
+      "indexes": [
+        {
+          "name": "policies_pkey",
+          "definition": "CREATE UNIQUE INDEX policies_pkey ON public.policies USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "policies_policy_number_key",
+          "definition": "CREATE UNIQUE INDEX policies_policy_number_key ON public.policies USING btree (policy_number)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "policies_created_by_fkey"
+        },
+        {
+          "column": "customer_id",
+          "references_schema": "public",
+          "references_table": "customers",
+          "references_column": "id",
+          "constraint_name": "policies_customer_id_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "policies_policy_number_key",
+          "type": "UNIQUE",
+          "column": "policy_number",
+          "definition": null
+        },
+        {
+          "name": "2200_32846_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_32846_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "policy_number IS NOT NULL"
+        },
+        {
+          "name": "2200_32846_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "product_type IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "24 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.pricing": {
+      "schema": "public",
+      "table_name": "pricing",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('pricing_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "product_code",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "term_years",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 3
+        },
+        {
+          "name": "multiplier",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 5,
+          "scale": 3,
+          "position": 4
+        },
+        {
+          "name": "customer_type",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'retail'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        }
+      ],
+      "indexes": [
+        {
+          "name": "pricing_pkey",
+          "definition": "CREATE UNIQUE INDEX pricing_pkey ON public.pricing USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "pricing_product_code_term_years_customer_type_key",
+          "definition": "CREATE UNIQUE INDEX pricing_product_code_term_years_customer_type_key ON public.pricing USING btree (product_code, term_years, customer_type)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "pricing_product_code_term_years_customer_type_key",
+          "type": "UNIQUE",
+          "column": "product_code",
+          "definition": null
+        },
+        {
+          "name": "pricing_product_code_term_years_customer_type_key",
+          "type": "UNIQUE",
+          "column": "term_years",
+          "definition": null
+        },
+        {
+          "name": "pricing_product_code_term_years_customer_type_key",
+          "type": "UNIQUE",
+          "column": "customer_type",
+          "definition": null
+        },
+        {
+          "name": "2200_24588_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_24588_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "product_code IS NOT NULL"
+        },
+        {
+          "name": "2200_24588_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "term_years IS NOT NULL"
+        },
+        {
+          "name": "2200_24588_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "multiplier IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 80,
+      "table_size": "184 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.products": {
+      "schema": "public",
+      "table_name": "products",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('products_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "product_code",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "product_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "base_price",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 10,
+          "scale": 2,
+          "position": 4
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        }
+      ],
+      "indexes": [
+        {
+          "name": "products_pkey",
+          "definition": "CREATE UNIQUE INDEX products_pkey ON public.products USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "products_product_code_key",
+          "definition": "CREATE UNIQUE INDEX products_product_code_key ON public.products USING btree (product_code)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "products_product_code_key",
+          "type": "UNIQUE",
+          "column": "product_code",
+          "definition": null
+        },
+        {
+          "name": "2200_24577_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_24577_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "product_code IS NOT NULL"
+        },
+        {
+          "name": "2200_24577_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "product_name IS NOT NULL"
+        },
+        {
+          "name": "2200_24577_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "base_price IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 12,
+      "table_size": "40 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.protection_plans": {
+      "schema": "public",
+      "table_name": "protection_plans",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('protection_plans_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "plan_id",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "transaction_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "customer_email",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "plan_type",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "plan_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "coverage_details",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "vehicle_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "start_date",
+          "data_type": "date",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "end_date",
+          "data_type": "date",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'active'::character varying",
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp with time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp with time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        }
+      ],
+      "indexes": [
+        {
+          "name": "protection_plans_pkey",
+          "definition": "CREATE UNIQUE INDEX protection_plans_pkey ON public.protection_plans USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "protection_plans_plan_id_key",
+          "definition": "CREATE UNIQUE INDEX protection_plans_plan_id_key ON public.protection_plans USING btree (plan_id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_protection_plans_customer_email",
+          "definition": "CREATE INDEX idx_protection_plans_customer_email ON public.protection_plans USING btree (customer_email)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_protection_plans_plan_id",
+          "definition": "CREATE INDEX idx_protection_plans_plan_id ON public.protection_plans USING btree (plan_id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_protection_plans_status",
+          "definition": "CREATE INDEX idx_protection_plans_status ON public.protection_plans USING btree (status)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "transaction_id",
+          "references_schema": "public",
+          "references_table": "transactions",
+          "references_column": "id",
+          "constraint_name": "protection_plans_transaction_id_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "protection_plans_plan_id_key",
+          "type": "UNIQUE",
+          "column": "plan_id",
+          "definition": null
+        },
+        {
+          "name": "2200_57359_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_57359_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "plan_id IS NOT NULL"
+        },
+        {
+          "name": "2200_57359_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "customer_email IS NOT NULL"
+        },
+        {
+          "name": "2200_57359_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "plan_type IS NOT NULL"
+        },
+        {
+          "name": "2200_57359_6_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "plan_name IS NOT NULL"
+        },
+        {
+          "name": "2200_57359_9_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "start_date IS NOT NULL"
+        },
+        {
+          "name": "2200_57359_10_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "end_date IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "48 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.resellers": {
+      "schema": "public",
+      "table_name": "resellers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "user_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "business_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "license_number",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "license_state",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 2,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "business_type",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'insurance_agency'::character varying",
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "contact_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "commission_structure",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "sales_metrics",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'pending'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "tier",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'bronze'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "approved_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "approved_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        },
+        {
+          "name": "documents",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'[]'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 16
+        },
+        {
+          "name": "territories",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": "'{}'::text[]",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 17
+        },
+        {
+          "name": "product_access",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": "'{all}'::text[]",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 18
+        }
+      ],
+      "indexes": [
+        {
+          "name": "resellers_pkey",
+          "definition": "CREATE UNIQUE INDEX resellers_pkey ON public.resellers USING btree (id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "user_id",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "resellers_user_id_fkey"
+        },
+        {
+          "column": "approved_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "resellers_approved_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "2200_32817_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_32817_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "business_name IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 1,
+      "table_size": "32 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.settings": {
+      "schema": "public",
+      "table_name": "settings",
+      "columns": [
+        {
+          "name": "key",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "value",
+          "data_type": "jsonb",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        }
+      ],
+      "indexes": [
+        {
+          "name": "settings_pkey",
+          "definition": "CREATE UNIQUE INDEX settings_pkey ON public.settings USING btree (key)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "2200_24597_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "key IS NOT NULL"
+        },
+        {
+          "name": "2200_24597_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "value IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 5,
+      "table_size": "32 kB",
+      "primary_keys": [
+        "key"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.tpas": {
+      "schema": "public",
+      "table_name": "tpas",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "api_endpoint",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 500,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "contact_email",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "contact_phone",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'active'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "authentication",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "supported_products",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": "'{}'::text[]",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "commission_rate",
+          "data_type": "numeric",
+          "nullable": true,
+          "default": "0.0000",
+          "max_length": null,
+          "precision": 5,
+          "scale": 4,
+          "position": 9
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        }
+      ],
+      "indexes": [
+        {
+          "name": "tpas_pkey",
+          "definition": "CREATE UNIQUE INDEX tpas_pkey ON public.tpas USING btree (id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "2200_32911_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_32911_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "name IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 2,
+      "table_size": "32 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.transactions": {
+      "schema": "public",
+      "table_name": "transactions",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "transaction_number",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "customer_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "policy_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "type",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": "0.00",
+          "max_length": null,
+          "precision": 12,
+          "scale": 2,
+          "position": 6
+        },
+        {
+          "name": "currency",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'USD'::character varying",
+          "max_length": 3,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'pending'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "payment_method",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "processor_response",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "processed_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "created_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "metadata",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "fees",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        },
+        {
+          "name": "taxes",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 16
+        }
+      ],
+      "indexes": [
+        {
+          "name": "transactions_pkey",
+          "definition": "CREATE UNIQUE INDEX transactions_pkey ON public.transactions USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "transactions_transaction_number_key",
+          "definition": "CREATE UNIQUE INDEX transactions_transaction_number_key ON public.transactions USING btree (transaction_number)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "transactions_created_by_fkey"
+        },
+        {
+          "column": "customer_id",
+          "references_schema": "public",
+          "references_table": "customers",
+          "references_column": "id",
+          "constraint_name": "transactions_customer_id_fkey"
+        },
+        {
+          "column": "policy_id",
+          "references_schema": "public",
+          "references_table": "policies",
+          "references_column": "id",
+          "constraint_name": "transactions_policy_id_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "transactions_transaction_number_key",
+          "type": "UNIQUE",
+          "column": "transaction_number",
+          "definition": null
+        },
+        {
+          "name": "2200_32877_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_32877_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "transaction_number IS NOT NULL"
+        },
+        {
+          "name": "2200_32877_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "type IS NOT NULL"
+        },
+        {
+          "name": "2200_32877_6_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "amount IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "24 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.users": {
+      "schema": "public",
+      "table_name": "users",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "email",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "password_hash",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "role",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'customer'::character varying",
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'active'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "profile",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "last_login",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "login_count",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 10
+        },
+        {
+          "name": "email_verified",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "false",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "phone_verified",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "false",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "two_factor_enabled",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "false",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "preferences",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "metadata",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        }
+      ],
+      "indexes": [
+        {
+          "name": "users_pkey",
+          "definition": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "users_email_key",
+          "definition": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "users_email_key",
+          "type": "UNIQUE",
+          "column": "email",
+          "definition": null
+        },
+        {
+          "name": "2200_32768_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_32768_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "email IS NOT NULL"
+        },
+        {
+          "name": "2200_32768_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "password_hash IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 3,
+      "table_size": "48 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_age_multipliers": {
+      "schema": "public",
+      "table_name": "vsc_age_multipliers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_age_multipliers_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "category",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "min_age",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 3
+        },
+        {
+          "name": "max_age",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 4
+        },
+        {
+          "name": "multiplier",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 5,
+          "scale": 3,
+          "position": 5
+        },
+        {
+          "name": "description",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 200,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "display_order",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 8
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_age_multipliers_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_age_multipliers_pkey ON public.vsc_age_multipliers USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_age_multipliers_category_key",
+          "definition": "CREATE UNIQUE INDEX vsc_age_multipliers_category_key ON public.vsc_age_multipliers USING btree (category)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "vsc_age_multipliers_category_key",
+          "type": "UNIQUE",
+          "column": "category",
+          "definition": null
+        },
+        {
+          "name": "2200_49242_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49242_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "category IS NOT NULL"
+        },
+        {
+          "name": "2200_49242_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "min_age IS NOT NULL"
+        },
+        {
+          "name": "2200_49242_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "max_age IS NOT NULL"
+        },
+        {
+          "name": "2200_49242_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "multiplier IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "40 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_base_rates": {
+      "schema": "public",
+      "table_name": "vsc_base_rates",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_base_rates_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "vehicle_class",
+          "data_type": "character",
+          "nullable": false,
+          "default": null,
+          "max_length": 1,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "coverage_level",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "base_rate",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 10,
+          "scale": 2,
+          "position": 4
+        },
+        {
+          "name": "effective_date",
+          "data_type": "date",
+          "nullable": false,
+          "default": "CURRENT_DATE",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "expiration_date",
+          "data_type": "date",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_base_rates_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_base_rates_pkey ON public.vsc_base_rates USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_base_rates_vehicle_class_coverage_level_effective_date_key",
+          "definition": "CREATE UNIQUE INDEX vsc_base_rates_vehicle_class_coverage_level_effective_date_key ON public.vsc_base_rates USING btree (vehicle_class, coverage_level, effective_date)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "coverage_level",
+          "references_schema": "public",
+          "references_table": "vsc_coverage_levels",
+          "references_column": "level_code",
+          "constraint_name": "vsc_base_rates_coverage_level_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "vsc_base_rates_vehicle_class_check",
+          "type": "CHECK",
+          "column": null,
+          "definition": "(vehicle_class = ANY (ARRAY['A'::bpchar, 'B'::bpchar, 'C'::bpchar]))"
+        },
+        {
+          "name": "vsc_base_rates_vehicle_class_coverage_level_effective_date_key",
+          "type": "UNIQUE",
+          "column": "vehicle_class",
+          "definition": null
+        },
+        {
+          "name": "vsc_base_rates_vehicle_class_coverage_level_effective_date_key",
+          "type": "UNIQUE",
+          "column": "coverage_level",
+          "definition": null
+        },
+        {
+          "name": "vsc_base_rates_vehicle_class_coverage_level_effective_date_key",
+          "type": "UNIQUE",
+          "column": "effective_date",
+          "definition": null
+        },
+        {
+          "name": "2200_49183_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49183_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "vehicle_class IS NOT NULL"
+        },
+        {
+          "name": "2200_49183_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "coverage_level IS NOT NULL"
+        },
+        {
+          "name": "2200_49183_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "base_rate IS NOT NULL"
+        },
+        {
+          "name": "2200_49183_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "effective_date IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 9,
+      "table_size": "40 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_coverage_levels": {
+      "schema": "public",
+      "table_name": "vsc_coverage_levels",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_coverage_levels_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "level_code",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "level_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "covered_components",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "benefits",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "exclusions",
+          "data_type": "ARRAY",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "display_order",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 9
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_coverage_levels_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_coverage_levels_pkey ON public.vsc_coverage_levels USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_coverage_levels_level_code_key",
+          "definition": "CREATE UNIQUE INDEX vsc_coverage_levels_level_code_key ON public.vsc_coverage_levels USING btree (level_code)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "vsc_coverage_levels_level_code_key",
+          "type": "UNIQUE",
+          "column": "level_code",
+          "definition": null
+        },
+        {
+          "name": "2200_49168_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49168_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "level_code IS NOT NULL"
+        },
+        {
+          "name": "2200_49168_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "level_name IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 3,
+      "table_size": "48 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_deductible_multipliers": {
+      "schema": "public",
+      "table_name": "vsc_deductible_multipliers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_deductible_multipliers_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "deductible_amount",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 2
+        },
+        {
+          "name": "multiplier",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 5,
+          "scale": 3,
+          "position": 3
+        },
+        {
+          "name": "description",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "display_order",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 6
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_deductible_multipliers_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_deductible_multipliers_pkey ON public.vsc_deductible_multipliers USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_deductible_multipliers_deductible_amount_key",
+          "definition": "CREATE UNIQUE INDEX vsc_deductible_multipliers_deductible_amount_key ON public.vsc_deductible_multipliers USING btree (deductible_amount)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "vsc_deductible_multipliers_deductible_amount_key",
+          "type": "UNIQUE",
+          "column": "deductible_amount",
+          "definition": null
+        },
+        {
+          "name": "2200_49215_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49215_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "deductible_amount IS NOT NULL"
+        },
+        {
+          "name": "2200_49215_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "multiplier IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "40 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_mileage_multipliers": {
+      "schema": "public",
+      "table_name": "vsc_mileage_multipliers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_mileage_multipliers_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "category",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "min_mileage",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 3
+        },
+        {
+          "name": "max_mileage",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 4
+        },
+        {
+          "name": "multiplier",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 5,
+          "scale": 3,
+          "position": 5
+        },
+        {
+          "name": "description",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 200,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "display_order",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 8
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_mileage_multipliers_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_mileage_multipliers_pkey ON public.vsc_mileage_multipliers USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_mileage_multipliers_category_key",
+          "definition": "CREATE UNIQUE INDEX vsc_mileage_multipliers_category_key ON public.vsc_mileage_multipliers USING btree (category)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "vsc_mileage_multipliers_category_key",
+          "type": "UNIQUE",
+          "column": "category",
+          "definition": null
+        },
+        {
+          "name": "2200_49228_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49228_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "category IS NOT NULL"
+        },
+        {
+          "name": "2200_49228_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "min_mileage IS NOT NULL"
+        },
+        {
+          "name": "2200_49228_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "max_mileage IS NOT NULL"
+        },
+        {
+          "name": "2200_49228_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "multiplier IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 6,
+      "table_size": "40 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_quotes": {
+      "schema": "public",
+      "table_name": "vsc_quotes",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "quote_number",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "customer_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "vehicle_make",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "vehicle_year",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 5
+        },
+        {
+          "name": "vehicle_mileage",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 6
+        },
+        {
+          "name": "coverage_level",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "term_months",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 8
+        },
+        {
+          "name": "deductible_amount",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 9
+        },
+        {
+          "name": "calculated_price",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 10,
+          "scale": 2,
+          "position": 10
+        },
+        {
+          "name": "final_price",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 10,
+          "scale": 2,
+          "position": 11
+        },
+        {
+          "name": "customer_type",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'retail'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "calculation_details",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'draft'::character varying",
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "expires_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 16
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 17
+        },
+        {
+          "name": "created_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 18
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_quotes_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_quotes_pkey ON public.vsc_quotes USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_quotes_quote_number_key",
+          "definition": "CREATE UNIQUE INDEX vsc_quotes_quote_number_key ON public.vsc_quotes USING btree (quote_number)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "vsc_quotes_created_by_fkey"
+        },
+        {
+          "column": "customer_id",
+          "references_schema": "public",
+          "references_table": "customers",
+          "references_column": "id",
+          "constraint_name": "vsc_quotes_customer_id_fkey"
+        },
+        {
+          "column": "coverage_level",
+          "references_schema": "public",
+          "references_table": "vsc_coverage_levels",
+          "references_column": "level_code",
+          "constraint_name": "vsc_quotes_coverage_level_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "vsc_quotes_quote_number_key",
+          "type": "UNIQUE",
+          "column": "quote_number",
+          "definition": null
+        },
+        {
+          "name": "2200_49270_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "quote_number IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "vehicle_make IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "vehicle_year IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_6_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "vehicle_mileage IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_7_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "coverage_level IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_8_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "term_months IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_9_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "deductible_amount IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_10_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "calculated_price IS NOT NULL"
+        },
+        {
+          "name": "2200_49270_11_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "final_price IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "24 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_rate_history": {
+      "schema": "public",
+      "table_name": "vsc_rate_history",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_rate_history_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "table_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "record_id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 3
+        },
+        {
+          "name": "field_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "old_value",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "new_value",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "changed_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "changed_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "change_reason",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_rate_history_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_rate_history_pkey ON public.vsc_rate_history USING btree (id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "changed_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "vsc_rate_history_changed_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "2200_49256_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49256_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "table_name IS NOT NULL"
+        },
+        {
+          "name": "2200_49256_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "record_id IS NOT NULL"
+        },
+        {
+          "name": "2200_49256_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "field_name IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "16 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_rate_matrix": {
+      "schema": "public",
+      "table_name": "vsc_rate_matrix",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_rate_matrix_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "vehicle_class",
+          "data_type": "character",
+          "nullable": false,
+          "default": null,
+          "max_length": 1,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "coverage_level",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 20,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "term_months",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 4
+        },
+        {
+          "name": "mileage_range_key",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "min_mileage",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 6
+        },
+        {
+          "name": "max_mileage",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 7
+        },
+        {
+          "name": "rate_amount",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 10,
+          "scale": 2,
+          "position": 8
+        },
+        {
+          "name": "effective_date",
+          "data_type": "date",
+          "nullable": false,
+          "default": "CURRENT_DATE",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_rate_matrix_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_rate_matrix_pkey ON public.vsc_rate_matrix USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key",
+          "definition": "CREATE UNIQUE INDEX vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key ON public.vsc_rate_matrix USING btree (vehicle_class, coverage_level, term_months, mileage_range_key, effective_date)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_vsc_rate_matrix_lookup",
+          "definition": "CREATE INDEX idx_vsc_rate_matrix_lookup ON public.vsc_rate_matrix USING btree (vehicle_class, coverage_level, term_months, min_mileage, max_mileage)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "coverage_level",
+          "references_schema": "public",
+          "references_table": "vsc_coverage_levels",
+          "references_column": "level_code",
+          "constraint_name": "vsc_rate_matrix_coverage_level_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "vsc_rate_matrix_vehicle_class_check",
+          "type": "CHECK",
+          "column": null,
+          "definition": "(vehicle_class = ANY (ARRAY['A'::bpchar, 'B'::bpchar, 'C'::bpchar]))"
+        },
+        {
+          "name": "vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key",
+          "type": "UNIQUE",
+          "column": "vehicle_class",
+          "definition": null
+        },
+        {
+          "name": "vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key",
+          "type": "UNIQUE",
+          "column": "coverage_level",
+          "definition": null
+        },
+        {
+          "name": "vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key",
+          "type": "UNIQUE",
+          "column": "term_months",
+          "definition": null
+        },
+        {
+          "name": "vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key",
+          "type": "UNIQUE",
+          "column": "mileage_range_key",
+          "definition": null
+        },
+        {
+          "name": "vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key",
+          "type": "UNIQUE",
+          "column": "effective_date",
+          "definition": null
+        },
+        {
+          "name": "2200_49301_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "vehicle_class IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "coverage_level IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "term_months IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "mileage_range_key IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_6_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "min_mileage IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_7_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "max_mileage IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_8_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "rate_amount IS NOT NULL"
+        },
+        {
+          "name": "2200_49301_9_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "effective_date IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 289,
+      "table_size": "208 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_term_multipliers": {
+      "schema": "public",
+      "table_name": "vsc_term_multipliers",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_term_multipliers_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "term_months",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 2
+        },
+        {
+          "name": "multiplier",
+          "data_type": "numeric",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 5,
+          "scale": 3,
+          "position": 3
+        },
+        {
+          "name": "description",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "display_order",
+          "data_type": "integer",
+          "nullable": true,
+          "default": "0",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 6
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_term_multipliers_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_term_multipliers_pkey ON public.vsc_term_multipliers USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_term_multipliers_term_months_key",
+          "definition": "CREATE UNIQUE INDEX vsc_term_multipliers_term_months_key ON public.vsc_term_multipliers USING btree (term_months)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "vsc_term_multipliers_term_months_key",
+          "type": "UNIQUE",
+          "column": "term_months",
+          "definition": null
+        },
+        {
+          "name": "2200_49202_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49202_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "term_months IS NOT NULL"
+        },
+        {
+          "name": "2200_49202_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "multiplier IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 6,
+      "table_size": "40 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.vsc_vehicle_classes": {
+      "schema": "public",
+      "table_name": "vsc_vehicle_classes",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "integer",
+          "nullable": false,
+          "default": "nextval('vsc_vehicle_classes_id_seq'::regclass)",
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "make",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "vehicle_class",
+          "data_type": "character",
+          "nullable": false,
+          "default": null,
+          "max_length": 1,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "class_description",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        }
+      ],
+      "indexes": [
+        {
+          "name": "vsc_vehicle_classes_pkey",
+          "definition": "CREATE UNIQUE INDEX vsc_vehicle_classes_pkey ON public.vsc_vehicle_classes USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "vsc_vehicle_classes_make_key",
+          "definition": "CREATE UNIQUE INDEX vsc_vehicle_classes_make_key ON public.vsc_vehicle_classes USING btree (make)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [],
+      "constraints": [
+        {
+          "name": "vsc_vehicle_classes_vehicle_class_check",
+          "type": "CHECK",
+          "column": null,
+          "definition": "(vehicle_class = ANY (ARRAY['A'::bpchar, 'B'::bpchar, 'C'::bpchar]))"
+        },
+        {
+          "name": "vsc_vehicle_classes_make_key",
+          "type": "UNIQUE",
+          "column": "make",
+          "definition": null
+        },
+        {
+          "name": "2200_49153_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_49153_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "make IS NOT NULL"
+        },
+        {
+          "name": "2200_49153_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "vehicle_class IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 38,
+      "table_size": "48 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    }
+  }
+}

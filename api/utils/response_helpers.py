@@ -17,7 +17,7 @@ def success_response(data, message=None, status_code=200):
         status_code (int): HTTP status code
         
     Returns:
-        tuple: (response_dict, status_code)
+        Flask Response object
     """
     response = {
         'success': True,
@@ -28,7 +28,7 @@ def success_response(data, message=None, status_code=200):
     if message:
         response['message'] = message
     
-    return response, status_code
+    return jsonify(response), status_code
 
 def error_response(message, status_code=400, error_code=None):
     """
@@ -40,7 +40,7 @@ def error_response(message, status_code=400, error_code=None):
         error_code (str): Optional error code
         
     Returns:
-        tuple: (response_dict, status_code)
+        Flask Response object
     """
     response = {
         'success': False,
@@ -51,7 +51,7 @@ def error_response(message, status_code=400, error_code=None):
     if error_code:
         response['error_code'] = error_code
     
-    return response, status_code
+    return jsonify(response), status_code
 
 def validation_error_response(errors, status_code=400):
     """
@@ -62,7 +62,7 @@ def validation_error_response(errors, status_code=400):
         status_code (int): HTTP status code
         
     Returns:
-        tuple: (response_dict, status_code)
+        Flask Response object
     """
     response = {
         'success': False,
@@ -71,7 +71,7 @@ def validation_error_response(errors, status_code=400):
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     }
     
-    return response, status_code
+    return jsonify(response), status_code
 
 def paginated_response(data, page=1, per_page=10, total=None):
     """
@@ -84,7 +84,7 @@ def paginated_response(data, page=1, per_page=10, total=None):
         total (int): Total number of items
         
     Returns:
-        dict: Paginated response
+        Flask Response object
     """
     response = {
         'success': True,
@@ -98,5 +98,23 @@ def paginated_response(data, page=1, per_page=10, total=None):
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     }
     
-    return response
+    return jsonify(response)
 
+# Simple response helpers for when imports fail
+def simple_success(data, status_code=200):
+    """Simple success response without imports"""
+    from flask import jsonify
+    return jsonify({
+        'success': True,
+        'data': data,
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }), status_code
+
+def simple_error(message, status_code=400):
+    """Simple error response without imports"""
+    from flask import jsonify
+    return jsonify({
+        'success': False,
+        'error': message,
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }), status_code

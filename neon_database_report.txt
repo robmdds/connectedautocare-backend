@@ -1,0 +1,575 @@
+🗄️  NEON POSTGRESQL DATABASE ANALYSIS REPORT
+============================================================
+📍 Host: ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech
+🏷️  Database: neondb
+👤 User: neondb_owner
+💾 Size: 9144 kB
+
+📊 SUMMARY
+--------------------
+Tables: 22
+Views: 0
+Schemas: public
+
+📋 TABLE: public.admin_settings (BASE TABLE)
+----------------------------------------
+Rows: 50
+Size: 96 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('admin_settings_id_seq'::regclass) 🔑
+  • category - character varying NOT NULL
+  • key - character varying NOT NULL
+  • value - jsonb NOT NULL
+  • description - text NULL
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_by - uuid NULL
+
+Foreign Keys:
+  • updated_by → public.users.id
+
+Indexes (2):
+  • admin_settings_pkey (btree)
+  • admin_settings_category_key_key (btree)
+
+
+📋 TABLE: public.customers (BASE TABLE)
+----------------------------------------
+Rows: 1
+Size: 32 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • user_id - uuid NULL
+  • customer_type - character varying NULL DEFAULT 'individual'::character varying
+  • personal_info - jsonb NULL DEFAULT '{}'::jsonb
+  • business_info - jsonb NULL DEFAULT '{}'::jsonb
+  • contact_info - jsonb NULL DEFAULT '{}'::jsonb
+  • billing_info - jsonb NULL DEFAULT '{}'::jsonb
+  • preferences - jsonb NULL DEFAULT '{}'::jsonb
+  • tags - ARRAY NULL DEFAULT '{}'::text[]
+  • lifetime_value - numeric NULL DEFAULT 0.00
+  • total_policies - integer NULL DEFAULT 0
+  • active_policies - integer NULL DEFAULT 0
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • last_activity - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • status - character varying NULL DEFAULT 'active'::character varying
+  • notes - jsonb NULL DEFAULT '[]'::jsonb
+  • assigned_agent - character varying NULL
+
+Foreign Keys:
+  • user_id → public.users.id
+
+Indexes (1):
+  • customers_pkey (btree)
+
+
+📋 TABLE: public.dealers (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 16 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • name - character varying NOT NULL
+  • license_number - character varying NULL
+  • contact_info - jsonb NULL DEFAULT '{}'::jsonb
+  • pricing_overrides - jsonb NULL DEFAULT '{}'::jsonb
+  • volume_discounts - jsonb NULL DEFAULT '{}'::jsonb
+  • status - character varying NULL DEFAULT 'active'::character varying
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (1):
+  • dealers_pkey (btree)
+
+
+📋 TABLE: public.policies (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 24 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • policy_number - character varying NOT NULL
+  • customer_id - uuid NULL
+  • product_type - character varying NOT NULL
+  • product_details - jsonb NULL DEFAULT '{}'::jsonb
+  • coverage_details - jsonb NULL DEFAULT '{}'::jsonb
+  • pricing - jsonb NULL DEFAULT '{}'::jsonb
+  • status - character varying NULL DEFAULT 'active'::character varying
+  • effective_date - date NULL
+  • expiration_date - date NULL
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • created_by - uuid NULL
+  • payment_info - jsonb NULL DEFAULT '{}'::jsonb
+  • claims - jsonb NULL DEFAULT '[]'::jsonb
+  • documents - jsonb NULL DEFAULT '[]'::jsonb
+  • notes - jsonb NULL DEFAULT '[]'::jsonb
+  • renewal_info - jsonb NULL DEFAULT '{}'::jsonb
+
+Foreign Keys:
+  • created_by → public.users.id
+  • customer_id → public.customers.id
+
+Indexes (2):
+  • policies_pkey (btree)
+  • policies_policy_number_key (btree)
+
+
+📋 TABLE: public.pricing (BASE TABLE)
+----------------------------------------
+Rows: 80
+Size: 184 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('pricing_id_seq'::regclass) 🔑
+  • product_code - character varying NOT NULL
+  • term_years - integer NOT NULL
+  • multiplier - numeric NOT NULL
+  • customer_type - character varying NULL DEFAULT 'retail'::character varying
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • pricing_pkey (btree)
+  • pricing_product_code_term_years_customer_type_key (btree)
+
+
+📋 TABLE: public.products (BASE TABLE)
+----------------------------------------
+Rows: 12
+Size: 40 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('products_id_seq'::regclass) 🔑
+  • product_code - character varying NOT NULL
+  • product_name - character varying NOT NULL
+  • base_price - numeric NOT NULL
+  • active - boolean NULL DEFAULT true
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • products_pkey (btree)
+  • products_product_code_key (btree)
+
+
+📋 TABLE: public.protection_plans (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 48 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('protection_plans_id_seq'::regclass) 🔑
+  • plan_id - character varying NOT NULL
+  • transaction_id - uuid NULL
+  • customer_email - character varying NOT NULL
+  • plan_type - character varying NOT NULL
+  • plan_name - character varying NOT NULL
+  • coverage_details - jsonb NULL
+  • vehicle_info - jsonb NULL
+  • start_date - date NOT NULL
+  • end_date - date NOT NULL
+  • status - character varying NULL DEFAULT 'active'::character varying
+  • created_at - timestamp with time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp with time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Foreign Keys:
+  • transaction_id → public.transactions.id
+
+Indexes (5):
+  • protection_plans_pkey (btree)
+  • protection_plans_plan_id_key (btree)
+  • idx_protection_plans_customer_email (btree)
+  • idx_protection_plans_plan_id (btree)
+  • idx_protection_plans_status (btree)
+
+
+📋 TABLE: public.resellers (BASE TABLE)
+----------------------------------------
+Rows: 1
+Size: 32 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • user_id - uuid NULL
+  • business_name - character varying NOT NULL
+  • license_number - character varying NULL
+  • license_state - character varying NULL
+  • business_type - character varying NULL DEFAULT 'insurance_agency'::character varying
+  • contact_info - jsonb NULL DEFAULT '{}'::jsonb
+  • commission_structure - jsonb NULL DEFAULT '{}'::jsonb
+  • sales_metrics - jsonb NULL DEFAULT '{}'::jsonb
+  • status - character varying NULL DEFAULT 'pending'::character varying
+  • tier - character varying NULL DEFAULT 'bronze'::character varying
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • approved_at - timestamp without time zone NULL
+  • approved_by - uuid NULL
+  • documents - jsonb NULL DEFAULT '[]'::jsonb
+  • territories - ARRAY NULL DEFAULT '{}'::text[]
+  • product_access - ARRAY NULL DEFAULT '{all}'::text[]
+
+Foreign Keys:
+  • user_id → public.users.id
+  • approved_by → public.users.id
+
+Indexes (1):
+  • resellers_pkey (btree)
+
+
+📋 TABLE: public.settings (BASE TABLE)
+----------------------------------------
+Rows: 5
+Size: 32 kB
+Primary Key(s): key
+
+Columns:
+  • key - character varying NOT NULL 🔑
+  • value - jsonb NOT NULL
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (1):
+  • settings_pkey (btree)
+
+
+📋 TABLE: public.tpas (BASE TABLE)
+----------------------------------------
+Rows: 2
+Size: 32 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • name - character varying NOT NULL
+  • api_endpoint - character varying NULL
+  • contact_email - character varying NULL
+  • contact_phone - character varying NULL
+  • status - character varying NULL DEFAULT 'active'::character varying
+  • authentication - jsonb NULL DEFAULT '{}'::jsonb
+  • supported_products - ARRAY NULL DEFAULT '{}'::text[]
+  • commission_rate - numeric NULL DEFAULT 0.0000
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (1):
+  • tpas_pkey (btree)
+
+
+📋 TABLE: public.transactions (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 24 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • transaction_number - character varying NOT NULL
+  • customer_id - uuid NULL
+  • policy_id - uuid NULL
+  • type - character varying NOT NULL
+  • amount - numeric NOT NULL DEFAULT 0.00
+  • currency - character varying NULL DEFAULT 'USD'::character varying
+  • status - character varying NULL DEFAULT 'pending'::character varying
+  • payment_method - jsonb NULL DEFAULT '{}'::jsonb
+  • processor_response - jsonb NULL DEFAULT '{}'::jsonb
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • processed_at - timestamp without time zone NULL
+  • created_by - uuid NULL
+  • metadata - jsonb NULL DEFAULT '{}'::jsonb
+  • fees - jsonb NULL DEFAULT '{}'::jsonb
+  • taxes - jsonb NULL DEFAULT '{}'::jsonb
+
+Foreign Keys:
+  • created_by → public.users.id
+  • customer_id → public.customers.id
+  • policy_id → public.policies.id
+
+Indexes (2):
+  • transactions_pkey (btree)
+  • transactions_transaction_number_key (btree)
+
+
+📋 TABLE: public.users (BASE TABLE)
+----------------------------------------
+Rows: 3
+Size: 48 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • email - character varying NOT NULL
+  • password_hash - character varying NOT NULL
+  • role - character varying NULL DEFAULT 'customer'::character varying
+  • status - character varying NULL DEFAULT 'active'::character varying
+  • profile - jsonb NULL DEFAULT '{}'::jsonb
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • last_login - timestamp without time zone NULL
+  • login_count - integer NULL DEFAULT 0
+  • email_verified - boolean NULL DEFAULT false
+  • phone_verified - boolean NULL DEFAULT false
+  • two_factor_enabled - boolean NULL DEFAULT false
+  • preferences - jsonb NULL DEFAULT '{}'::jsonb
+  • metadata - jsonb NULL DEFAULT '{}'::jsonb
+
+Indexes (2):
+  • users_pkey (btree)
+  • users_email_key (btree)
+
+
+📋 TABLE: public.vsc_age_multipliers (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 40 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_age_multipliers_id_seq'::regclass) 🔑
+  • category - character varying NOT NULL
+  • min_age - integer NOT NULL DEFAULT 0
+  • max_age - integer NOT NULL
+  • multiplier - numeric NOT NULL
+  • description - character varying NULL
+  • active - boolean NULL DEFAULT true
+  • display_order - integer NULL DEFAULT 0
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • vsc_age_multipliers_pkey (btree)
+  • vsc_age_multipliers_category_key (btree)
+
+
+📋 TABLE: public.vsc_base_rates (BASE TABLE)
+----------------------------------------
+Rows: 9
+Size: 40 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_base_rates_id_seq'::regclass) 🔑
+  • vehicle_class - character NOT NULL
+  • coverage_level - character varying NOT NULL
+  • base_rate - numeric NOT NULL
+  • effective_date - date NOT NULL DEFAULT CURRENT_DATE
+  • expiration_date - date NULL
+  • active - boolean NULL DEFAULT true
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Foreign Keys:
+  • coverage_level → public.vsc_coverage_levels.level_code
+
+Indexes (2):
+  • vsc_base_rates_pkey (btree)
+  • vsc_base_rates_vehicle_class_coverage_level_effective_date_key (btree)
+
+
+📋 TABLE: public.vsc_coverage_levels (BASE TABLE)
+----------------------------------------
+Rows: 3
+Size: 48 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_coverage_levels_id_seq'::regclass) 🔑
+  • level_code - character varying NOT NULL
+  • level_name - character varying NOT NULL
+  • description - text NULL
+  • covered_components - ARRAY NULL
+  • benefits - ARRAY NULL
+  • exclusions - ARRAY NULL
+  • active - boolean NULL DEFAULT true
+  • display_order - integer NULL DEFAULT 0
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • vsc_coverage_levels_pkey (btree)
+  • vsc_coverage_levels_level_code_key (btree)
+
+
+📋 TABLE: public.vsc_deductible_multipliers (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 40 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_deductible_multipliers_id_seq'::regclass) 🔑
+  • deductible_amount - integer NOT NULL
+  • multiplier - numeric NOT NULL
+  • description - character varying NULL
+  • active - boolean NULL DEFAULT true
+  • display_order - integer NULL DEFAULT 0
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • vsc_deductible_multipliers_pkey (btree)
+  • vsc_deductible_multipliers_deductible_amount_key (btree)
+
+
+📋 TABLE: public.vsc_mileage_multipliers (BASE TABLE)
+----------------------------------------
+Rows: 6
+Size: 40 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_mileage_multipliers_id_seq'::regclass) 🔑
+  • category - character varying NOT NULL
+  • min_mileage - integer NOT NULL DEFAULT 0
+  • max_mileage - integer NOT NULL
+  • multiplier - numeric NOT NULL
+  • description - character varying NULL
+  • active - boolean NULL DEFAULT true
+  • display_order - integer NULL DEFAULT 0
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • vsc_mileage_multipliers_pkey (btree)
+  • vsc_mileage_multipliers_category_key (btree)
+
+
+📋 TABLE: public.vsc_quotes (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 24 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • quote_number - character varying NOT NULL
+  • customer_id - uuid NULL
+  • vehicle_make - character varying NOT NULL
+  • vehicle_year - integer NOT NULL
+  • vehicle_mileage - integer NOT NULL
+  • coverage_level - character varying NOT NULL
+  • term_months - integer NOT NULL
+  • deductible_amount - integer NOT NULL
+  • calculated_price - numeric NOT NULL
+  • final_price - numeric NOT NULL
+  • customer_type - character varying NULL DEFAULT 'retail'::character varying
+  • calculation_details - jsonb NULL DEFAULT '{}'::jsonb
+  • status - character varying NULL DEFAULT 'draft'::character varying
+  • expires_at - timestamp without time zone NULL
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • created_by - uuid NULL
+
+Foreign Keys:
+  • created_by → public.users.id
+  • customer_id → public.customers.id
+  • coverage_level → public.vsc_coverage_levels.level_code
+
+Indexes (2):
+  • vsc_quotes_pkey (btree)
+  • vsc_quotes_quote_number_key (btree)
+
+
+📋 TABLE: public.vsc_rate_history (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 16 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_rate_history_id_seq'::regclass) 🔑
+  • table_name - character varying NOT NULL
+  • record_id - integer NOT NULL
+  • field_name - character varying NOT NULL
+  • old_value - text NULL
+  • new_value - text NULL
+  • changed_by - uuid NULL
+  • changed_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • change_reason - text NULL
+
+Foreign Keys:
+  • changed_by → public.users.id
+
+Indexes (1):
+  • vsc_rate_history_pkey (btree)
+
+
+📋 TABLE: public.vsc_rate_matrix (BASE TABLE)
+----------------------------------------
+Rows: 289
+Size: 208 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_rate_matrix_id_seq'::regclass) 🔑
+  • vehicle_class - character NOT NULL
+  • coverage_level - character varying NOT NULL
+  • term_months - integer NOT NULL
+  • mileage_range_key - character varying NOT NULL
+  • min_mileage - integer NOT NULL
+  • max_mileage - integer NOT NULL
+  • rate_amount - numeric NOT NULL
+  • effective_date - date NOT NULL DEFAULT CURRENT_DATE
+  • active - boolean NULL DEFAULT true
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Foreign Keys:
+  • coverage_level → public.vsc_coverage_levels.level_code
+
+Indexes (3):
+  • vsc_rate_matrix_pkey (btree)
+  • vsc_rate_matrix_vehicle_class_coverage_level_term_months_mi_key (btree)
+  • idx_vsc_rate_matrix_lookup (btree)
+
+
+📋 TABLE: public.vsc_term_multipliers (BASE TABLE)
+----------------------------------------
+Rows: 6
+Size: 40 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_term_multipliers_id_seq'::regclass) 🔑
+  • term_months - integer NOT NULL
+  • multiplier - numeric NOT NULL
+  • description - character varying NULL
+  • active - boolean NULL DEFAULT true
+  • display_order - integer NULL DEFAULT 0
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • vsc_term_multipliers_pkey (btree)
+  • vsc_term_multipliers_term_months_key (btree)
+
+
+📋 TABLE: public.vsc_vehicle_classes (BASE TABLE)
+----------------------------------------
+Rows: 38
+Size: 48 kB
+Primary Key(s): id
+
+Columns:
+  • id - integer NOT NULL DEFAULT nextval('vsc_vehicle_classes_id_seq'::regclass) 🔑
+  • make - character varying NOT NULL
+  • vehicle_class - character NOT NULL
+  • class_description - text NULL
+  • active - boolean NULL DEFAULT true
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Indexes (2):
+  • vsc_vehicle_classes_pkey (btree)
+  • vsc_vehicle_classes_make_key (btree)
+

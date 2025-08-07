@@ -223,7 +223,7 @@ def calculate_hero_price(product_type, term_years, coverage_limit=500, customer_
 def get_all_products_pricing():
     """Get pricing for all products - tries database first"""
     try:
-        database_url = os.environ.get('POSTGRES_URL')
+        database_url = os.environ.get('DATABASE_URL')
         if database_url:
             import psycopg2
 

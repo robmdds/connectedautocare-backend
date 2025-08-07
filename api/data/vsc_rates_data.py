@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-VSC (Vehicle Service Contract) Rates Data
+VSC (Vehicle Service Contract) Rates Data - FIXED VERSION
 Database-driven rate cards and vehicle classification for VSC pricing
+Fixed database connection management issues
 """
 
 import psycopg2
@@ -10,6 +11,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional, List, Tuple
 from functools import lru_cache
+import threading
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -37,29 +39,45 @@ FALLBACK_VEHICLE_CLASSIFICATION = {
 }
 
 class VSCRateManager:
-    """Database-driven VSC rate management"""
+    """Database-driven VSC rate management with proper connection handling"""
     
     def __init__(self, database_url=DATABASE_URL):
         self.database_url = database_url
-        self._connection = None
+        self._connection_lock = threading.Lock()
         
-    def get_connection(self):
-        """Get database connection with connection pooling"""
-        if self._connection is None or self._connection.closed:
-            try:
-                self._connection = psycopg2.connect(self.database_url)
-            except psycopg2.Error as e:
-                logger.error(f"Database connection failed: {e}")
-                raise
-        return self._connection
+        # Remove caching from instance - we'll implement it differently
+        self._cached_data = {}
+        self._cache_timestamps = {}
+        self._cache_ttl = 300  # 5 minutes cache TTL
+        
+    def _get_fresh_connection(self):
+        """Get a fresh database connection for each operation"""
+        try:
+            connection = psycopg2.connect(self.database_url)
+            return connection
+        except psycopg2.Error as e:
+            logger.error(f"Database connection failed: {e}")
+            raise
     
-    def close_connection(self):
-        """Close database connection"""
-        if self._connection and not self._connection.closed:
-            self._connection.close()
-            self._connection = None
+    def _is_cache_valid(self, key: str) -> bool:
+        """Check if cached data is still valid"""
+        if key not in self._cached_data:
+            return False
+        
+        cache_time = self._cache_timestamps.get(key, 0)
+        return (datetime.now().timestamp() - cache_time) < self._cache_ttl
     
-    @lru_cache(maxsize=128)
+    def _set_cache(self, key: str, data):
+        """Set cached data with timestamp"""
+        self._cached_data[key] = data
+        self._cache_timestamps[key] = datetime.now().timestamp()
+    
+    def _get_cache(self, key: str):
+        """Get cached data if valid"""
+        if self._is_cache_valid(key):
+            return self._cached_data[key]
+        return None
+    
     def get_vehicle_classification(self) -> Dict[str, str]:
         """
         Get vehicle classification from database with caching
@@ -67,8 +85,14 @@ class VSCRateManager:
         Returns:
             dict: Make to class mapping
         """
+        cache_key = 'vehicle_classification'
+        cached_result = self._get_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         try:
-            with self.get_connection() as conn:
+            # Use fresh connection for each operation
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT make, vehicle_class, active 
@@ -81,13 +105,14 @@ class VSCRateManager:
                     for make, vehicle_class, active in cursor.fetchall():
                         classification[make.lower().strip()] = vehicle_class
                     
-                    return classification if classification else FALLBACK_VEHICLE_CLASSIFICATION
+                    result = classification if classification else FALLBACK_VEHICLE_CLASSIFICATION
+                    self._set_cache(cache_key, result)
+                    return result
                     
         except psycopg2.Error as e:
             logger.warning(f"Failed to load vehicle classification from database: {e}")
             return FALLBACK_VEHICLE_CLASSIFICATION
     
-    @lru_cache(maxsize=64)
     def get_coverage_levels(self) -> Dict[str, Dict]:
         """
         Get coverage levels from database with caching
@@ -95,8 +120,13 @@ class VSCRateManager:
         Returns:
             dict: Coverage level information
         """
+        cache_key = 'coverage_levels'
+        cached_result = self._get_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT level_code, level_name, description, active 
@@ -112,7 +142,14 @@ class VSCRateManager:
                             'description': description
                         }
                     
-                    return coverage_levels
+                    result = coverage_levels if coverage_levels else {
+                        'silver': {'name': 'Silver Coverage', 'description': 'Basic powertrain protection'},
+                        'gold': {'name': 'Gold Coverage', 'description': 'Enhanced component protection'},
+                        'platinum': {'name': 'Platinum Coverage', 'description': 'Comprehensive exclusionary coverage'}
+                    }
+                    
+                    self._set_cache(cache_key, result)
+                    return result
                     
         except psycopg2.Error as e:
             logger.warning(f"Failed to load coverage levels from database: {e}")
@@ -122,7 +159,6 @@ class VSCRateManager:
                 'platinum': {'name': 'Platinum Coverage', 'description': 'Comprehensive exclusionary coverage'}
             }
     
-    @lru_cache(maxsize=32)
     def get_term_multipliers(self) -> Dict[int, float]:
         """
         Get term multipliers from database with caching
@@ -130,8 +166,13 @@ class VSCRateManager:
         Returns:
             dict: Term to multiplier mapping
         """
+        cache_key = 'term_multipliers'
+        cached_result = self._get_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT term_months, multiplier 
@@ -144,15 +185,17 @@ class VSCRateManager:
                     for term_months, multiplier in cursor.fetchall():
                         multipliers[term_months] = float(multiplier)
                     
-                    return multipliers if multipliers else {
+                    result = multipliers if multipliers else {
                         12: 0.40, 24: 0.70, 36: 1.00, 48: 1.25, 60: 1.45, 72: 1.60
                     }
+                    
+                    self._set_cache(cache_key, result)
+                    return result
                     
         except psycopg2.Error as e:
             logger.warning(f"Failed to load term multipliers from database: {e}")
             return {12: 0.40, 24: 0.70, 36: 1.00, 48: 1.25, 60: 1.45, 72: 1.60}
     
-    @lru_cache(maxsize=16)
     def get_deductible_multipliers(self) -> Dict[int, float]:
         """
         Get deductible multipliers from database with caching
@@ -160,8 +203,13 @@ class VSCRateManager:
         Returns:
             dict: Deductible to multiplier mapping
         """
+        cache_key = 'deductible_multipliers'
+        cached_result = self._get_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT deductible_amount, multiplier 
@@ -174,15 +222,17 @@ class VSCRateManager:
                     for deductible_amount, multiplier in cursor.fetchall():
                         multipliers[deductible_amount] = float(multiplier)
                     
-                    return multipliers if multipliers else {
+                    result = multipliers if multipliers else {
                         0: 1.25, 50: 1.15, 100: 1.00, 200: 0.90, 500: 0.75, 1000: 0.65
                     }
+                    
+                    self._set_cache(cache_key, result)
+                    return result
                     
         except psycopg2.Error as e:
             logger.warning(f"Failed to load deductible multipliers from database: {e}")
             return {0: 1.25, 50: 1.15, 100: 1.00, 200: 0.90, 500: 0.75, 1000: 0.65}
     
-    @lru_cache(maxsize=16)
     def get_mileage_multipliers(self) -> List[Dict]:
         """
         Get mileage multipliers from database with caching
@@ -190,8 +240,13 @@ class VSCRateManager:
         Returns:
             list: Mileage multiplier configurations
         """
+        cache_key = 'mileage_multipliers'
+        cached_result = self._get_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT category, min_mileage, max_mileage, multiplier, description
@@ -210,13 +265,16 @@ class VSCRateManager:
                             'description': description
                         })
                     
-                    return multipliers if multipliers else [
+                    result = multipliers if multipliers else [
                         {'category': 'low', 'min_mileage': 0, 'max_mileage': 50000, 'multiplier': 1.00, 'description': '0-50k miles'},
                         {'category': 'medium', 'min_mileage': 50001, 'max_mileage': 75000, 'multiplier': 1.15, 'description': '50k-75k miles'},
                         {'category': 'high', 'min_mileage': 75001, 'max_mileage': 100000, 'multiplier': 1.30, 'description': '75k-100k miles'},
                         {'category': 'very_high', 'min_mileage': 100001, 'max_mileage': 125000, 'multiplier': 1.50, 'description': '100k-125k miles'},
                         {'category': 'extreme', 'min_mileage': 125001, 'max_mileage': 999999, 'multiplier': 1.75, 'description': '125k+ miles'}
                     ]
+                    
+                    self._set_cache(cache_key, result)
+                    return result
                     
         except psycopg2.Error as e:
             logger.warning(f"Failed to load mileage multipliers from database: {e}")
@@ -228,7 +286,6 @@ class VSCRateManager:
                 {'category': 'extreme', 'min_mileage': 125001, 'max_mileage': 999999, 'multiplier': 1.75, 'description': '125k+ miles'}
             ]
     
-    @lru_cache(maxsize=16)
     def get_age_multipliers(self) -> List[Dict]:
         """
         Get age multipliers from database with caching
@@ -236,8 +293,13 @@ class VSCRateManager:
         Returns:
             list: Age multiplier configurations
         """
+        cache_key = 'age_multipliers'
+        cached_result = self._get_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
+        
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT category, min_age, max_age, multiplier, description
@@ -256,12 +318,15 @@ class VSCRateManager:
                             'description': description
                         })
                     
-                    return multipliers if multipliers else [
+                    result = multipliers if multipliers else [
                         {'category': 'new', 'min_age': 0, 'max_age': 3, 'multiplier': 1.00, 'description': '0-3 years'},
                         {'category': 'recent', 'min_age': 4, 'max_age': 6, 'multiplier': 1.15, 'description': '4-6 years'},
                         {'category': 'older', 'min_age': 7, 'max_age': 10, 'multiplier': 1.35, 'description': '7-10 years'},
                         {'category': 'old', 'min_age': 11, 'max_age': 999, 'multiplier': 1.60, 'description': '11+ years'}
                     ]
+                    
+                    self._set_cache(cache_key, result)
+                    return result
                     
         except psycopg2.Error as e:
             logger.warning(f"Failed to load age multipliers from database: {e}")
@@ -286,7 +351,7 @@ class VSCRateManager:
             float: Exact rate if found, None otherwise
         """
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT rate_amount 
@@ -320,7 +385,7 @@ class VSCRateManager:
             float: Base rate
         """
         try:
-            with self.get_connection() as conn:
+            with self._get_fresh_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT base_rate 
@@ -562,10 +627,3 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
             'success': False,
             'error': str(e)
         }
-
-def __del__():
-    """Clean up database connection on module destruction"""
-    try:
-        rate_manager.close_connection()
-    except:
-        pass

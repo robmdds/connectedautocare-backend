@@ -22,7 +22,6 @@ class DatabaseSettingsService:
             self.database_url = 'postgres://neondb_owner:npg_qH6nhmdrSFL1@ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require'
         
         if not self.database_url:
-            print("❌ DATABASE_URL not provided or set as environment variable")
             self.connection_available = False
         else:
             self.connection_available = self._test_connection()
@@ -35,11 +34,9 @@ class DatabaseSettingsService:
         try:
             conn = psycopg2.connect(self.database_url)
             cursor = conn.cursor()
-            
-            print(f"Testing connection to {self.database_url}")
+
             cursor.execute("SELECT 1;")
             result = cursor.fetchone()
-            print(f"Basic query result: {result}")
             
             cursor.execute("""
                 SELECT EXISTS (
@@ -48,13 +45,10 @@ class DatabaseSettingsService:
                 );
             """)
             table_exists = cursor.fetchone()[0]
-            print(f"Admin settings table exists: {table_exists}")
             
             if not table_exists:
-                print("📋 Creating admin_settings table...")
                 self._create_admin_settings_table(cursor)
                 conn.commit()
-                print("✅ admin_settings table created successfully")
             
             cursor.close()
             conn.close()
@@ -109,8 +103,6 @@ class DatabaseSettingsService:
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (category, key) DO NOTHING;
             """, (category, key, value, description))
-        
-        print("✅ Default settings inserted")
     
     def get_connection(self):
         if not self.connection_available:
@@ -250,8 +242,10 @@ except Exception as e:
 def get_admin_fee(product_type: str = 'default') -> float:
     if settings_service.connection_available:
         fee = settings_service.get_admin_setting('fees', f'{product_type}_admin_fee')
+        print(f"Admin fee for {product_type}: {fee}")
         if fee is None:
             fee = settings_service.get_admin_setting('fees', 'admin_fee', 25.00)
+            print(f"Using default admin fee: {fee}")
         return float(fee)
     return 25.00
 
