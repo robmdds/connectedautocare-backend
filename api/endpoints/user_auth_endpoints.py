@@ -14,7 +14,8 @@ user_auth_bp = Blueprint('user_auth', __name__)
 
 # Import updated authentication system
 try:
-    from auth.user_auth import UserAuth, SessionManager, SecurityUtils
+    # Now uses your DatabaseAuth system
+    from auth.user_auth import DatabaseUserAuth as UserAuth, DatabaseSecurityUtils as SecurityUtils, token_required, role_required
     user_management_available = True
 except ImportError as e:
     print(f"Warning: User management not available: {e}")
@@ -145,7 +146,7 @@ def role_required(required_role):
 
 @user_auth_bp.route('/register', methods=['POST'])
 def register():
-    """Register new user with database integration"""
+    """Register new user with database integration using DatabaseAuth"""
     try:
         data = request.get_json()
 
@@ -159,95 +160,64 @@ def register():
         password = data.get('password')
         role = data.get('role')
 
-        # Validate email format
-        if not UserAuth.validate_email(email):
-            return jsonify(error_response('Invalid email format')), 400
-
-        # Validate password strength
-        valid_password, password_message = UserAuth.validate_password(password)
-        if not valid_password:
-            return jsonify(error_response(password_message)), 400
-
         # Validate role
         if role not in ['customer', 'wholesale_reseller']:  # Admin created separately
             return jsonify(error_response('Invalid role')), 400
 
-        # Database operations
+        # Use DatabaseAuth to create user (this handles validation internally)
+        user_data, error_msg = UserAuth.create_user(
+            email=email,
+            password=password,
+            role=role,
+            profile=data.get('profile', {})
+        )
+        
+        if not user_data:
+            return jsonify(error_response(error_msg)), 400
+
+        user_id = user_data['id']
+
+        # Create role-specific profiles
         db_manager = get_db_manager()
         
-        if db_manager.available:
-            # Check if user already exists
-            existing_user = execute_query(
-                'SELECT id FROM users WHERE email = %s',
-                (email,),
-                'one'
-            )
-            
-            if existing_user['success'] and existing_user['data']:
-                return jsonify(error_response('User already exists')), 409
-
-            # Create new user in database
-            user_id = str(uuid.uuid4())
-            password_hash = UserAuth.hash_password(password)
-
-            user_data = {
-                'id': user_id,
-                'email': email,
-                'password_hash': password_hash,
-                'role': role,
-                'status': 'active',
-                'profile': data.get('profile', {}),
+        if role == 'wholesale_reseller':
+            reseller_data = {
+                'id': str(uuid.uuid4()),
+                'user_id': user_id,
+                'business_name': data.get('business_name', ''),
+                'license_number': data.get('license_number', ''),
+                'license_state': data.get('license_state', ''),
+                'business_type': data.get('business_type', 'insurance_agency'),
+                'contact_info': {
+                    'phone': data.get('phone', ''),
+                    'email': email
+                },
+                'status': 'pending',
                 'created_at': datetime.now(timezone.utc),
                 'updated_at': datetime.now(timezone.utc)
             }
+            db_manager.insert_record('resellers', reseller_data)
 
-            user_result = db_manager.insert_record('users', user_data)
-            
-            if not user_result['success']:
-                return jsonify(error_response('Failed to create user')), 500
+        elif role == 'customer':
+            customer_data = {
+                'id': str(uuid.uuid4()),
+                'user_id': user_id,
+                'customer_type': 'individual',
+                'personal_info': {
+                    'first_name': data.get('first_name', ''),
+                    'last_name': data.get('last_name', '')
+                },
+                'contact_info': {
+                    'email': email,
+                    'phone': data.get('phone', '')
+                },
+                'status': 'active',
+                'created_at': datetime.now(timezone.utc),
+                'updated_at': datetime.now(timezone.utc)
+            }
+            db_manager.insert_record('customers', customer_data)
 
-            # Create role-specific profiles
-            if role == 'wholesale_reseller':
-                reseller_data = {
-                    'id': str(uuid.uuid4()),
-                    'user_id': user_id,
-                    'business_name': data.get('business_name', ''),
-                    'license_number': data.get('license_number', ''),
-                    'license_state': data.get('license_state', ''),
-                    'business_type': data.get('business_type', 'insurance_agency'),
-                    'contact_info': {
-                        'phone': data.get('phone', ''),
-                        'email': email
-                    },
-                    'status': 'pending',
-                    'created_at': datetime.now(timezone.utc),
-                    'updated_at': datetime.now(timezone.utc)
-                }
-                db_manager.insert_record('resellers', reseller_data)
-
-            elif role == 'customer':
-                customer_data = {
-                    'id': str(uuid.uuid4()),
-                    'user_id': user_id,
-                    'customer_type': 'individual',
-                    'personal_info': {
-                        'first_name': data.get('first_name', ''),
-                        'last_name': data.get('last_name', '')
-                    },
-                    'contact_info': {
-                        'email': email,
-                        'phone': data.get('phone', '')
-                    },
-                    'status': 'active',
-                    'created_at': datetime.now(timezone.utc),
-                    'updated_at': datetime.now(timezone.utc)
-                }
-                db_manager.insert_record('customers', customer_data)
-
-        else:
-            return jsonify(error_response('Database not available')), 503
-
-        # Generate token
+        # Generate token using DatabaseAuth
         token = UserAuth.generate_token({
             'id': user_id,
             'email': email,
@@ -273,7 +243,7 @@ def register():
 
 @user_auth_bp.route('/login', methods=['POST'])
 def login():
-    """User login with database validation"""
+    """User login with database validation using DatabaseAuth"""
     try:
         data = request.get_json()
 
@@ -283,70 +253,16 @@ def login():
         if not email or not password:
             return jsonify(error_response('Email and password are required')), 400
 
-        # Database authentication
-        db_manager = get_db_manager()
+        # Use DatabaseAuth to authenticate (this handles all the database logic)
+        auth_result, error_msg = UserAuth.authenticate_user(email, password)
         
-        if not db_manager.available:
-            return jsonify(error_response('Database not available')), 503
-
-        # Find user by email
-        user_result = execute_query('''
-            SELECT id, email, password_hash, role, status, profile, 
-                   last_login, login_count
-            FROM users 
-            WHERE email = %s AND status = 'active'
-        ''', (email,), 'one')
-
-        if not user_result['success'] or not user_result['data']:
-            SecurityUtils.log_security_event(None, 'login_failed', {
-                'email': email, 
-                'reason': 'user_not_found'
-            })
-            return jsonify(error_response('Invalid credentials')), 401
-
-        user = user_result['data']
-
-        # Verify password
-        if not UserAuth.verify_password(password, user['password_hash']):
-            SecurityUtils.log_security_event(user['id'], 'login_failed', {
-                'reason': 'invalid_password'
-            })
-            return jsonify(error_response('Invalid credentials')), 401
-
-        # Update login statistics
-        db_manager.update_record(
-            'users',
-            {
-                'last_login': datetime.now(timezone.utc),
-                'login_count': user.get('login_count', 0) + 1,
-                'updated_at': datetime.now(timezone.utc)
-            },
-            'id = %s',
-            (user['id'],)
-        )
-
-        # Generate token
-        token = UserAuth.generate_token({
-            'id': str(user['id']),
-            'email': user['email'],
-            'role': user['role']
-        })
-
-        # Log successful login
-        SecurityUtils.log_security_event(user['id'], 'login_success', {
-            'role': user['role']
-        })
+        if not auth_result:
+            return jsonify(error_response(error_msg or 'Invalid credentials')), 401
 
         return jsonify(success_response({
             'message': 'Login successful',
-            'user': {
-                'id': str(user['id']),
-                'email': user['email'],
-                'role': user['role'],
-                'profile': user.get('profile', {}),
-                'last_login': user['last_login'].isoformat() if user['last_login'] else None
-            },
-            'token': token
+            'user': auth_result['user'],
+            'token': auth_result['token']
         }))
 
     except Exception as e:
@@ -366,56 +282,41 @@ def logout():
 @user_auth_bp.route('/profile', methods=['GET'])
 @token_required
 def get_profile():
-    """Get user profile from database"""
+    """Get user profile from database using DatabaseAuth"""
     try:
         user_id = request.current_user.get('user_id')
         
-        # Get user with role-specific data
-        user_result = execute_query('''
-            SELECT u.id, u.email, u.role, u.status, u.profile, 
-                   u.created_at, u.updated_at, u.last_login, u.login_count,
-                   c.id as customer_id, c.customer_type, c.personal_info, c.contact_info as customer_contact,
-                   r.id as reseller_id, r.business_name, r.license_number, r.tier, r.status as reseller_status
-            FROM users u
-            LEFT JOIN customers c ON u.id = c.user_id
-            LEFT JOIN resellers r ON u.id = r.user_id
-            WHERE u.id = %s
-        ''', (user_id,), 'one')
-
-        if not user_result['success'] or not user_result['data']:
+        # Use DatabaseAuth to get user data
+        user_data = UserAuth.get_user_by_id(user_id)
+        
+        if not user_data:
             return jsonify(error_response('User not found')), 404
 
-        user = user_result['data']
-        
         profile_data = {
             'user': {
-                'id': str(user['id']),
-                'email': user['email'],
-                'role': user['role'],
-                'status': user['status'],
-                'profile': user.get('profile', {}),
-                'created_at': user['created_at'].isoformat() if user['created_at'] else None,
-                'last_login': user['last_login'].isoformat() if user['last_login'] else None,
-                'login_count': user.get('login_count', 0)
+                'id': user_data['id'],
+                'email': user_data['email'],
+                'role': user_data['role'],
+                'status': user_data['status'],
+                'profile': user_data.get('profile', {}),
+                'created_at': user_data['created_at'].isoformat() if user_data.get('created_at') else None,
+                'last_login': user_data['last_login'].isoformat() if user_data.get('last_login') else None,
+                'login_count': user_data.get('login_count', 0)
             }
         }
 
         # Add role-specific data
-        if user.get('customer_id'):
+        if user_data.get('customer_id'):
             profile_data['customer_profile'] = {
-                'id': str(user['customer_id']),
-                'customer_type': user['customer_type'],
-                'personal_info': user.get('personal_info', {}),
-                'contact_info': user.get('customer_contact', {})
+                'id': user_data['customer_id'],
+                'customer_type': user_data['customer_type']
             }
 
-        if user.get('reseller_id'):
+        if user_data.get('reseller_id'):
             profile_data['reseller_profile'] = {
-                'id': str(user['reseller_id']),
-                'business_name': user['business_name'],
-                'license_number': user['license_number'],
-                'tier': user['tier'],
-                'status': user['reseller_status']
+                'id': user_data['reseller_id'],
+                'business_name': user_data['business_name'],
+                'tier': user_data['tier']
             }
 
         return jsonify(success_response(profile_data))
@@ -519,19 +420,14 @@ def change_password():
         if not user_result['success'] or not user_result['data']:
             return jsonify(error_response('User not found')), 404
 
-        # Verify current password
+        # Verify current password using DatabaseAuth
         if not UserAuth.verify_password(current_password, user_result['data']['password_hash']):
             SecurityUtils.log_security_event(user_id, 'password_change_failed', {
                 'reason': 'invalid_current_password'
             })
             return jsonify(error_response('Current password is incorrect')), 401
 
-        # Validate new password
-        valid_password, password_message = UserAuth.validate_password(new_password)
-        if not valid_password:
-            return jsonify(error_response(password_message)), 400
-
-        # Update password in database
+        # Update password in database using DatabaseAuth
         db_manager = get_db_manager()
         if not db_manager.available:
             return jsonify(error_response('Database not available')), 503
@@ -554,7 +450,7 @@ def change_password():
 
 @user_auth_bp.route('/verify-token', methods=['POST'])
 def verify_token():
-    """Verify if a token is valid"""
+    """Verify if a token is valid using DatabaseAuth"""
     try:
         data = request.get_json()
         token = data.get('token') if data else None
@@ -567,37 +463,20 @@ def verify_token():
             else:
                 return jsonify(error_response('Token is required')), 400
 
-        # Verify JWT token
-        import jwt
-        from flask import current_app
+        # Use DatabaseAuth to verify token (this includes database validation)
+        valid, result = UserAuth.verify_token(token)
         
-        try:
-            payload = jwt.decode(token, current_app.config.get('SECRET_KEY', 'default-secret'), algorithms=['HS256'])
-            
-            # Check if user still exists and is active
-            user_result = execute_query(
-                'SELECT id, email, role, status FROM users WHERE id = %s AND status = %s',
-                (payload['user_id'], 'active'),
-                'one'
-            )
-            
-            if user_result['success'] and user_result['data']:
-                user = user_result['data']
-                return jsonify(success_response({
-                    'valid': True,
-                    'user': {
-                        'id': str(user['id']),
-                        'email': user['email'],
-                        'role': user['role']
-                    }
-                }))
-            else:
-                return jsonify(error_response('User not found or inactive')), 401
-                
-        except jwt.ExpiredSignatureError:
-            return jsonify(error_response('Token has expired')), 401
-        except jwt.InvalidTokenError:
-            return jsonify(error_response('Invalid token')), 401
+        if not valid:
+            return jsonify(error_response(result)), 401
+
+        return jsonify(success_response({
+            'valid': True,
+            'user': {
+                'id': result['user_id'],
+                'email': result['email'],
+                'role': result['role']
+            }
+        }))
 
     except Exception as e:
         return jsonify(error_response(f'Token verification failed: {str(e)}')), 500
@@ -612,7 +491,6 @@ def auth_health():
             'service': 'User Authentication API',
             'status': 'healthy',
             'database_connected': db_manager.available,
-            'user_management_available': user_management_available,
             'features': [
                 'User Registration/Login',
                 'Profile Management',
@@ -628,7 +506,7 @@ def auth_health():
             'error': str(e)
         }), 500
 
-# Keep the admin-only endpoints for backward compatibility
+# Additional endpoints for admin functionality
 @user_auth_bp.route('/sessions', methods=['GET'])
 @token_required
 @role_required('admin')

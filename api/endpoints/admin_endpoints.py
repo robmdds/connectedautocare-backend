@@ -15,7 +15,7 @@ admin_bp = Blueprint('admin', __name__)
 # Import admin services with error handling
 try:
     from auth.user_auth import token_required, role_required, SecurityUtils
-    from models.database_models import UserModel, DatabaseUtils
+    from models.database_models import UserModel
     admin_services_available = True
     
     # Initialize models (in production, these would be persistent)
