@@ -1,7 +1,7 @@
 {
   "database_info": {
     "version": "PostgreSQL 17.5 on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
-    "size": "9144 kB",
+    "size": "9560 kB",
     "current_schema": "public"
   },
   "connection_info": {
@@ -10,8 +10,8 @@
     "user": "neondb_owner"
   },
   "summary": {
-    "total_tables": 22,
-    "total_views": 0,
+    "total_tables": 28,
+    "total_views": 1,
     "schemas": [
       "public"
     ]
@@ -154,6 +154,878 @@
       "triggers": [],
       "row_count": 50,
       "table_size": "96 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.contract_activities": {
+      "schema": "public",
+      "table_name": "contract_activities",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "contract_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "activity_type",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "performed_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "performed_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "metadata",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contract_activities_pkey",
+          "definition": "CREATE UNIQUE INDEX contract_activities_pkey ON public.contract_activities USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_contract_activities_contract_id",
+          "definition": "CREATE INDEX idx_contract_activities_contract_id ON public.contract_activities USING btree (contract_id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "contract_id",
+          "references_schema": "public",
+          "references_table": "generated_contracts",
+          "references_column": "id",
+          "constraint_name": "contract_activities_contract_id_fkey"
+        },
+        {
+          "column": "performed_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "contract_activities_performed_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "2200_73855_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_73855_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "activity_type IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "24 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.contract_signatures": {
+      "schema": "public",
+      "table_name": "contract_signatures",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "contract_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "signer_type",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "signer_name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "signer_email",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "signature_method",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "signed_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "signature_data",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'pending'::character varying",
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contract_signatures_pkey",
+          "definition": "CREATE UNIQUE INDEX contract_signatures_pkey ON public.contract_signatures USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_contract_signatures_contract_id",
+          "definition": "CREATE INDEX idx_contract_signatures_contract_id ON public.contract_signatures USING btree (contract_id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "contract_id",
+          "references_schema": "public",
+          "references_table": "generated_contracts",
+          "references_column": "id",
+          "constraint_name": "contract_signatures_contract_id_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "chk_signer_type",
+          "type": "CHECK",
+          "column": null,
+          "definition": "((signer_type)::text = ANY ((ARRAY['customer'::character varying, 'agent'::character varying, 'manager'::character varying, 'witness'::character varying])::text[]))"
+        },
+        {
+          "name": "chk_signature_status",
+          "type": "CHECK",
+          "column": null,
+          "definition": "((status)::text = ANY ((ARRAY['pending'::character varying, 'signed'::character varying, 'declined'::character varying, 'expired'::character varying])::text[]))"
+        },
+        {
+          "name": "2200_73819_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_73819_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "signer_type IS NOT NULL"
+        },
+        {
+          "name": "2200_73819_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "signer_name IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "24 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.contract_stats": {
+      "schema": "public",
+      "table_name": "contract_stats",
+      "columns": [
+        {
+          "name": "active_templates",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 1
+        },
+        {
+          "name": "inactive_templates",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 2
+        },
+        {
+          "name": "product_types",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 3
+        },
+        {
+          "name": "total_contracts",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 4
+        },
+        {
+          "name": "active_contracts",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 5
+        },
+        {
+          "name": "contracts_today",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 6
+        },
+        {
+          "name": "total_uploads",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 7
+        },
+        {
+          "name": "uploads_today",
+          "data_type": "bigint",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 64,
+          "scale": 0,
+          "position": 8
+        }
+      ],
+      "indexes": [],
+      "foreign_keys": [],
+      "constraints": [],
+      "triggers": [],
+      "row_count": 1,
+      "table_size": "0 bytes",
+      "primary_keys": [],
+      "table_type": "VIEW"
+    },
+    "public.contract_template_files": {
+      "schema": "public",
+      "table_name": "contract_template_files",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "template_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "filename",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "original_filename",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "file_path",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 500,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "file_size",
+          "data_type": "integer",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 6
+        },
+        {
+          "name": "mime_type",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "upload_date",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "uploaded_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'uploaded'::character varying",
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contract_template_files_pkey",
+          "definition": "CREATE UNIQUE INDEX contract_template_files_pkey ON public.contract_template_files USING btree (id)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "template_id",
+          "references_schema": "public",
+          "references_table": "contract_templates",
+          "references_column": "id",
+          "constraint_name": "contract_template_files_template_id_fkey"
+        },
+        {
+          "column": "uploaded_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "contract_template_files_uploaded_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "2200_73764_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_73764_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "filename IS NOT NULL"
+        },
+        {
+          "name": "2200_73764_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "original_filename IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "16 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.contract_templates": {
+      "schema": "public",
+      "table_name": "contract_templates",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "template_id",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "name",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "product_type",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "product_id",
+          "data_type": "character varying",
+          "nullable": false,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "template_file",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 255,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "fields",
+          "data_type": "jsonb",
+          "nullable": false,
+          "default": "'[]'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "active",
+          "data_type": "boolean",
+          "nullable": true,
+          "default": "true",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "created_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contract_templates_pkey",
+          "definition": "CREATE UNIQUE INDEX contract_templates_pkey ON public.contract_templates USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "contract_templates_template_id_key",
+          "definition": "CREATE UNIQUE INDEX contract_templates_template_id_key ON public.contract_templates USING btree (template_id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_contract_templates_product_type",
+          "definition": "CREATE INDEX idx_contract_templates_product_type ON public.contract_templates USING btree (product_type)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_contract_templates_active",
+          "definition": "CREATE INDEX idx_contract_templates_active ON public.contract_templates USING btree (active)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "contract_templates_created_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "contract_templates_template_id_key",
+          "type": "UNIQUE",
+          "column": "template_id",
+          "definition": null
+        },
+        {
+          "name": "chk_product_type",
+          "type": "CHECK",
+          "column": null,
+          "definition": "((product_type)::text = ANY ((ARRAY['vsc'::character varying, 'hero'::character varying, 'gap'::character varying, 'tire_wheel'::character varying, 'key_replacement'::character varying])::text[]))"
+        },
+        {
+          "name": "2200_73745_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_73745_2_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "template_id IS NOT NULL"
+        },
+        {
+          "name": "2200_73745_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "name IS NOT NULL"
+        },
+        {
+          "name": "2200_73745_4_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "product_type IS NOT NULL"
+        },
+        {
+          "name": "2200_73745_5_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "product_id IS NOT NULL"
+        },
+        {
+          "name": "2200_73745_7_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "fields IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 2,
+      "table_size": "80 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.contract_versions": {
+      "schema": "public",
+      "table_name": "contract_versions",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "contract_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "version_number",
+          "data_type": "integer",
+          "nullable": false,
+          "default": null,
+          "max_length": null,
+          "precision": 32,
+          "scale": 0,
+          "position": 3
+        },
+        {
+          "name": "changes",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "file_path",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 500,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "created_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contract_versions_pkey",
+          "definition": "CREATE UNIQUE INDEX contract_versions_pkey ON public.contract_versions USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "contract_versions_contract_id_version_number_key",
+          "definition": "CREATE UNIQUE INDEX contract_versions_contract_id_version_number_key ON public.contract_versions USING btree (contract_id, version_number)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "contract_id",
+          "references_schema": "public",
+          "references_table": "generated_contracts",
+          "references_column": "id",
+          "constraint_name": "contract_versions_contract_id_fkey"
+        },
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "contract_versions_created_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "contract_versions_contract_id_version_number_key",
+          "type": "UNIQUE",
+          "column": "contract_id",
+          "definition": null
+        },
+        {
+          "name": "contract_versions_contract_id_version_number_key",
+          "type": "UNIQUE",
+          "column": "version_number",
+          "definition": null
+        },
+        {
+          "name": "2200_73834_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_73834_3_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "version_number IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "24 kB",
       "primary_keys": [
         "id"
       ],
@@ -342,6 +1214,16 @@
           "precision": null,
           "scale": null,
           "position": 18
+        },
+        {
+          "name": "reseller_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 19
         }
       ],
       "indexes": [
@@ -358,6 +1240,13 @@
           "references_table": "users",
           "references_column": "id",
           "constraint_name": "customers_user_id_fkey"
+        },
+        {
+          "column": "reseller_id",
+          "references_schema": "public",
+          "references_table": "resellers",
+          "references_column": "user_id",
+          "constraint_name": "customers_reseller_id_fkey"
         }
       ],
       "constraints": [
@@ -496,6 +1385,262 @@
       "triggers": [],
       "row_count": 0,
       "table_size": "16 kB",
+      "primary_keys": [
+        "id"
+      ],
+      "table_type": "BASE TABLE"
+    },
+    "public.generated_contracts": {
+      "schema": "public",
+      "table_name": "generated_contracts",
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 1
+        },
+        {
+          "name": "contract_number",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 100,
+          "precision": null,
+          "scale": null,
+          "position": 2
+        },
+        {
+          "name": "template_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 3
+        },
+        {
+          "name": "customer_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 4
+        },
+        {
+          "name": "reseller_id",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 5
+        },
+        {
+          "name": "customer_data",
+          "data_type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 6
+        },
+        {
+          "name": "contract_data",
+          "data_type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 7
+        },
+        {
+          "name": "status",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": "'draft'::character varying",
+          "max_length": 50,
+          "precision": null,
+          "scale": null,
+          "position": 8
+        },
+        {
+          "name": "generated_date",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 9
+        },
+        {
+          "name": "effective_date",
+          "data_type": "date",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 10
+        },
+        {
+          "name": "expiration_date",
+          "data_type": "date",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 11
+        },
+        {
+          "name": "file_path",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 500,
+          "precision": null,
+          "scale": null,
+          "position": 12
+        },
+        {
+          "name": "signed_file_path",
+          "data_type": "character varying",
+          "nullable": true,
+          "default": null,
+          "max_length": 500,
+          "precision": null,
+          "scale": null,
+          "position": 13
+        },
+        {
+          "name": "created_by",
+          "data_type": "uuid",
+          "nullable": true,
+          "default": null,
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 14
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "max_length": null,
+          "precision": null,
+          "scale": null,
+          "position": 15
+        }
+      ],
+      "indexes": [
+        {
+          "name": "generated_contracts_pkey",
+          "definition": "CREATE UNIQUE INDEX generated_contracts_pkey ON public.generated_contracts USING btree (id)",
+          "type": "btree"
+        },
+        {
+          "name": "generated_contracts_contract_number_key",
+          "definition": "CREATE UNIQUE INDEX generated_contracts_contract_number_key ON public.generated_contracts USING btree (contract_number)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_generated_contracts_template_id",
+          "definition": "CREATE INDEX idx_generated_contracts_template_id ON public.generated_contracts USING btree (template_id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_generated_contracts_customer_id",
+          "definition": "CREATE INDEX idx_generated_contracts_customer_id ON public.generated_contracts USING btree (customer_id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_generated_contracts_reseller_id",
+          "definition": "CREATE INDEX idx_generated_contracts_reseller_id ON public.generated_contracts USING btree (reseller_id)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_generated_contracts_status",
+          "definition": "CREATE INDEX idx_generated_contracts_status ON public.generated_contracts USING btree (status)",
+          "type": "btree"
+        },
+        {
+          "name": "idx_generated_contracts_effective_date",
+          "definition": "CREATE INDEX idx_generated_contracts_effective_date ON public.generated_contracts USING btree (effective_date)",
+          "type": "btree"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "template_id",
+          "references_schema": "public",
+          "references_table": "contract_templates",
+          "references_column": "id",
+          "constraint_name": "generated_contracts_template_id_fkey"
+        },
+        {
+          "column": "customer_id",
+          "references_schema": "public",
+          "references_table": "customers",
+          "references_column": "id",
+          "constraint_name": "generated_contracts_customer_id_fkey"
+        },
+        {
+          "column": "reseller_id",
+          "references_schema": "public",
+          "references_table": "resellers",
+          "references_column": "user_id",
+          "constraint_name": "generated_contracts_reseller_id_fkey"
+        },
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "generated_contracts_created_by_fkey"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "generated_contracts_contract_number_key",
+          "type": "UNIQUE",
+          "column": "contract_number",
+          "definition": null
+        },
+        {
+          "name": "chk_contract_status",
+          "type": "CHECK",
+          "column": null,
+          "definition": "((status)::text = ANY ((ARRAY['draft'::character varying, 'generated'::character varying, 'sent'::character varying, 'signed'::character varying, 'active'::character varying, 'cancelled'::character varying, 'expired'::character varying])::text[]))"
+        },
+        {
+          "name": "2200_73784_1_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "id IS NOT NULL"
+        },
+        {
+          "name": "2200_73784_6_not_null",
+          "type": "CHECK",
+          "column": null,
+          "definition": "customer_data IS NOT NULL"
+        }
+      ],
+      "triggers": [],
+      "row_count": 0,
+      "table_size": "64 kB",
       "primary_keys": [
         "id"
       ],
@@ -700,18 +1845,18 @@
       ],
       "foreign_keys": [
         {
-          "column": "created_by",
-          "references_schema": "public",
-          "references_table": "users",
-          "references_column": "id",
-          "constraint_name": "policies_created_by_fkey"
-        },
-        {
           "column": "customer_id",
           "references_schema": "public",
           "references_table": "customers",
           "references_column": "id",
           "constraint_name": "policies_customer_id_fkey"
+        },
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "policies_created_by_fkey"
         }
       ],
       "constraints": [
@@ -1425,6 +2570,11 @@
           "name": "resellers_pkey",
           "definition": "CREATE UNIQUE INDEX resellers_pkey ON public.resellers USING btree (id)",
           "type": "btree"
+        },
+        {
+          "name": "resellers_user_id_unique",
+          "definition": "CREATE UNIQUE INDEX resellers_user_id_unique ON public.resellers USING btree (user_id)",
+          "type": "btree"
         }
       ],
       "foreign_keys": [
@@ -1445,6 +2595,12 @@
       ],
       "constraints": [
         {
+          "name": "resellers_user_id_unique",
+          "type": "UNIQUE",
+          "column": "user_id",
+          "definition": null
+        },
+        {
           "name": "2200_32817_1_not_null",
           "type": "CHECK",
           "column": null,
@@ -1459,7 +2615,7 @@
       ],
       "triggers": [],
       "row_count": 1,
-      "table_size": "32 kB",
+      "table_size": "48 kB",
       "primary_keys": [
         "id"
       ],
@@ -1854,13 +3010,6 @@
       ],
       "foreign_keys": [
         {
-          "column": "created_by",
-          "references_schema": "public",
-          "references_table": "users",
-          "references_column": "id",
-          "constraint_name": "transactions_created_by_fkey"
-        },
-        {
           "column": "customer_id",
           "references_schema": "public",
           "references_table": "customers",
@@ -1873,6 +3022,13 @@
           "references_table": "policies",
           "references_column": "id",
           "constraint_name": "transactions_policy_id_fkey"
+        },
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "transactions_created_by_fkey"
         }
       ],
       "constraints": [
@@ -3118,18 +4274,18 @@
       ],
       "foreign_keys": [
         {
-          "column": "created_by",
-          "references_schema": "public",
-          "references_table": "users",
-          "references_column": "id",
-          "constraint_name": "vsc_quotes_created_by_fkey"
-        },
-        {
           "column": "customer_id",
           "references_schema": "public",
           "references_table": "customers",
           "references_column": "id",
           "constraint_name": "vsc_quotes_customer_id_fkey"
+        },
+        {
+          "column": "created_by",
+          "references_schema": "public",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "vsc_quotes_created_by_fkey"
         },
         {
           "column": "coverage_level",

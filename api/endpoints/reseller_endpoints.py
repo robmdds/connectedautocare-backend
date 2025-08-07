@@ -590,7 +590,7 @@ def get_reseller_dashboard():
                         'action': 'create_quote'
                     })
         
-        return jsonify(dashboard_data)
+        return jsonify(dashboard_data) 
         
     except Exception as e:
         return jsonify(f'Failed to load dashboard: {str(e)}'), 500
@@ -603,133 +603,144 @@ def get_reseller_dashboard():
 @token_required
 @role_required('wholesale_reseller')
 def get_reseller_customers():
-    """Get reseller's customers"""
+    """Get all customers assigned to this reseller"""
     try:
         user_id = request.current_user.get('user_id')
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 20, type=int)
-        search_term = request.args.get('search', '')
-        status_filter = request.args.get('status')
+        search = request.args.get('search', '').strip()
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
         
-        db_manager = get_db_manager()
+        offset = (page - 1) * limit
         
-        if db_manager.available:
-            # Get reseller ID
-            reseller_result = execute_query(
-                'SELECT reseller_id FROM resellers WHERE user_id = %s',
-                (user_id,),
-                'one'
-            )
+        # Build search condition
+        search_condition = ""
+        params = [user_id]
+        
+        if search:
+            search_condition = '''AND (
+                c.personal_info->>'first_name' ILIKE %s OR
+                c.personal_info->>'last_name' ILIKE %s OR
+                c.contact_info->>'email' ILIKE %s OR
+                c.business_info->>'company_name' ILIKE %s
+            )'''
+            search_param = f'%{search}%'
+            params.extend([search_param, search_param, search_param, search_param])
+        
+        params.extend([limit, offset])
+        
+        customers_result = execute_query(f'''
+            SELECT c.id, c.customer_type, c.personal_info, c.contact_info, c.business_info,
+                   c.lifetime_value, c.total_policies, c.active_policies, c.created_at, c.last_activity,
+                   COUNT(q.id) as total_quotes,
+                   COUNT(CASE WHEN q.converted_to_policy THEN 1 END) as converted_quotes
+            FROM customers c
+            LEFT JOIN quotes q ON c.id = q.customer_id
+            WHERE c.assigned_reseller_id = %s {search_condition}
+            GROUP BY c.id, c.customer_type, c.personal_info, c.contact_info, c.business_info,
+                     c.lifetime_value, c.total_policies, c.active_policies, c.created_at, c.last_activity
+            ORDER BY c.last_activity DESC
+            LIMIT %s OFFSET %s
+        ''', tuple(params), 'all')
+        
+        # Format customer data
+        customers = []
+        for customer_data in customers_result['data'] or []:
+            personal_info = json.loads(customer_data[2]) if customer_data[2] else {}
+            contact_info = json.loads(customer_data[3]) if customer_data[3] else {}
+            business_info = json.loads(customer_data[4]) if customer_data[4] else {}
             
-            if reseller_result['success'] and reseller_result['data']:
-                reseller_id = reseller_result['data'][0]
-                
-                # Build query with filters
-                where_conditions = ['assigned_reseller_id = %s']
-                params = [reseller_id]
-                
-                if status_filter:
-                    where_conditions.append("status = %s")
-                    params.append(status_filter)
-                
-                where_clause = ' AND '.join(where_conditions)
-                
-                # Get leads
-                leads_result = execute_query(f'''
-                    SELECT 
-                        id, lead_id, first_name, last_name, email, phone,
-                        lead_source, status, interest_level, product_interest,
-                        estimated_value, notes, created_at, last_contact_date,
-                        next_follow_up_date
-                    FROM leads
-                    WHERE {where_clause}
-                    ORDER BY created_at DESC
-                    LIMIT %s OFFSET %s
-                ''', tuple(params + [per_page, (page - 1) * per_page]))
-                
-                if leads_result['success']:
-                    leads = []
-                    for lead in leads_result['data']:
-                        lead_dict = {
-                            'id': lead[0],
-                            'lead_id': lead[1],
-                            'first_name': lead[2],
-                            'last_name': lead[3],
-                            'email': lead[4],
-                            'phone': lead[5],
-                            'lead_source': lead[6],
-                            'status': lead[7],
-                            'interest_level': lead[8],
-                            'product_interest': lead[9],
-                            'estimated_value': float(lead[10]) if lead[10] else 0.0,
-                            'notes': lead[11],
-                            'created_at': lead[12].isoformat() if lead[12] else None,
-                            'last_contact_date': lead[13].isoformat() if lead[13] else None,
-                            'next_follow_up_date': lead[14].isoformat() if lead[14] else None
-                        }
-                        
-                        # Calculate lead age and urgency
-                        if lead[12]:  # created_at
-                            lead_age_days = (datetime.now(timezone.utc) - lead[12].replace(tzinfo=timezone.utc)).days
-                            lead_dict['lead_age_days'] = lead_age_days
-                            
-                            if lead_age_days > 30:
-                                lead_dict['urgency'] = 'low'
-                            elif lead_age_days > 7:
-                                lead_dict['urgency'] = 'medium'
-                            else:
-                                lead_dict['urgency'] = 'high'
-                        
-                        leads.append(lead_dict)
-                    
-                    # Get lead summary
-                    summary_result = execute_query(f'''
-                        SELECT 
-                            COUNT(*) as total_leads,
-                            COUNT(*) FILTER (WHERE status = 'new') as new_leads,
-                            COUNT(*) FILTER (WHERE status = 'contacted') as contacted_leads,
-                            COUNT(*) FILTER (WHERE status = 'qualified') as qualified_leads,
-                            COUNT(*) FILTER (WHERE status = 'converted') as converted_leads,
-                            SUM(estimated_value) as total_estimated_value
-                        FROM leads
-                        WHERE {where_clause}
-                    ''', tuple(params), 'one')
-                    
-                    summary = {}
-                    if summary_result['success'] and summary_result['data']:
-                        stats = summary_result['data']
-                        summary = {
-                            'total_leads': stats[0],
-                            'new_leads': stats[1],
-                            'contacted_leads': stats[2],
-                            'qualified_leads': stats[3],
-                            'converted_leads': stats[4],
-                            'total_estimated_value': float(stats[5]) if stats[5] else 0.0,
-                            'conversion_rate': (stats[4] / stats[0] * 100) if stats[0] > 0 else 0
-                        }
-                    
-                    return jsonify({
-                        'leads': leads,
-                        'summary': summary,
-                        'pagination': {
-                            'page': page,
-                            'per_page': per_page,
-                            'total': len(leads)
-                        }
-                    })
-                else:
-                    return jsonify('Failed to fetch leads'), 500
-            else:
-                return jsonify('Reseller record not found'), 404
-        else:
-            return jsonify({
-                'leads': [],
-                'summary': {'total_leads': 0, 'conversion_rate': 0},
-                'source': 'database_unavailable'
+            customers.append({
+                'id': str(customer_data[0]),
+                'customer_type': customer_data[1],
+                'name': f"{personal_info.get('first_name', '')} {personal_info.get('last_name', '')}".strip(),
+                'email': contact_info.get('email', ''),
+                'company': business_info.get('company_name', ''),
+                'phone': contact_info.get('phone', ''),
+                'lifetime_value': float(customer_data[5]) if customer_data[5] else 0,
+                'total_policies': customer_data[6] or 0,
+                'active_policies': customer_data[7] or 0,
+                'total_quotes': customer_data[9] or 0,
+                'converted_quotes': customer_data[10] or 0,
+                'created_at': customer_data[8].isoformat() + 'Z',
+                'last_activity': customer_data[8].isoformat() + 'Z' if customer_data[8] else None
             })
-
+        
+        return jsonify({
+            'success': True,
+            'customers': customers
+        })
+        
     except Exception as e:
-        return jsonify(f'Failed to get leads: {str(e)}'), 500
+        return jsonify(f'Failed to fetch customers: {str(e)}'), 500
+
+
+@reseller_bp.route('/customers', methods=['POST'])
+@token_required
+@role_required('wholesale_reseller')
+def create_customer():
+    """Create a new customer assigned to this reseller"""
+    try:
+        user_id = request.current_user.get('user_id')
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['customer_type']
+        if data.get('customer_type') == 'individual':
+            required_fields.extend(['first_name', 'last_name', 'email'])
+        else:  # business
+            required_fields.extend(['company_name', 'contact_email'])
+        
+        missing_fields = []
+        for field in required_fields:
+            if field in ['first_name', 'last_name']:
+                if not data.get('personal_info', {}).get(field):
+                    missing_fields.append(field)
+            elif field == 'email':
+                if not data.get('contact_info', {}).get('email'):
+                    missing_fields.append('email')
+            elif field == 'company_name':
+                if not data.get('business_info', {}).get('company_name'):
+                    missing_fields.append('company_name')
+            elif field == 'contact_email':
+                if not data.get('contact_info', {}).get('email'):
+                    missing_fields.append('contact_email')
+            elif not data.get(field):
+                missing_fields.append(field)
+        
+        if missing_fields:
+            return jsonify(f"Missing required fields: {', '.join(missing_fields)}"), 400
+        
+        # Create customer
+        customer_result = execute_query('''
+            INSERT INTO customers (
+                customer_type, personal_info, business_info, contact_info, 
+                billing_info, preferences, assigned_reseller_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        ''', (
+            data.get('customer_type', 'individual'),
+            json.dumps(data.get('personal_info', {})),
+            json.dumps(data.get('business_info', {})),
+            json.dumps(data.get('contact_info', {})),
+            json.dumps(data.get('billing_info', {})),
+            json.dumps(data.get('preferences', {})),
+            user_id
+        ), 'one')
+        
+        if customer_result['success']:
+            customer_id = customer_result['data'][0]
+            return jsonify({
+                'success': True,
+                'customer_id': str(customer_id),
+                'message': 'Customer created successfully'
+            })
+        
+        return jsonify('Failed to create customer'), 500
+        
+    except Exception as e:
+        return jsonify(f'Failed to create customer: {str(e)}'), 500
+
 
 @reseller_bp.route('/customers/<customer_id>', methods=['GET'])
 @token_required
@@ -920,7 +931,7 @@ def add_lead():
 @token_required
 @role_required('wholesale_reseller')
 def generate_quote_for_customer():
-    """Generate quote for customer with wholesale pricing"""
+    """Generate quote for customer with wholesale pricing and optional sharing"""
     try:
         data = request.get_json()
         user_id = request.current_user.get('user_id')
@@ -933,26 +944,28 @@ def generate_quote_for_customer():
         
         customer_id = data['customer_id']
         product_type = data['product_type']
+        create_shareable = data.get('create_shareable', False)
         
         db_manager = get_db_manager()
         
         if db_manager.available:
             # Verify customer belongs to this reseller
             customer_result = execute_query('''
-                SELECT c.customer_id, r.reseller_id, r.commission_rate
+                SELECT c.id, r.user_id, r.commission_rate
                 FROM customers c
-                JOIN resellers r ON c.assigned_reseller_id = r.reseller_id
-                WHERE c.customer_id = %s AND r.user_id = %s
+                JOIN resellers r ON c.assigned_reseller_id = r.user_id
+                WHERE c.id = %s AND r.user_id = %s
             ''', (customer_id, user_id), 'one')
             
             if not customer_result['success'] or not customer_result['data']:
                 return jsonify('Customer not found or access denied'), 404
             
-            customer_id, reseller_id, commission_rate = customer_result['data']
+            customer_uuid, reseller_id, commission_rate = customer_result['data']
             
             # Generate quote based on product type
+            quote_result = None
+            
             if product_type in ['hero', 'home_protection']:
-                # Use Hero service for home protection quotes
                 try:
                     from services.hero_rating_service import HeroRatingService
                     hero_service = HeroRatingService()
@@ -961,54 +974,14 @@ def generate_quote_for_customer():
                         product_type=data.get('hero_product_type', 'home_protection'),
                         term_years=data.get('term_years', 1),
                         coverage_limit=data.get('coverage_limit', 500),
-                        customer_type='wholesale',  # Wholesale pricing
+                        customer_type='wholesale',
                         state=data.get('state', 'FL'),
                         zip_code=data.get('zip_code', '33101')
                     )
-                    
-                    if quote_result.get('success'):
-                        # Add reseller-specific information
-                        quote_result['reseller_info'] = {
-                            'reseller_id': reseller_id,
-                            'commission_rate': float(commission_rate),
-                            'estimated_commission': quote_result.get('pricing_breakdown', {}).get('total_price', 0) * float(commission_rate)
-                        }
-                        
-                        # Save quote to database
-                        quote_id = f"QTE-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-                        save_quote_result = execute_query('''
-                            INSERT INTO quotes (
-                                quote_id, customer_id, reseller_id, product_type, quote_data,
-                                total_price, commission_amount, status, created_by, created_at, expires_at
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s)
-                            RETURNING created_at
-                        ''', (
-                            quote_id,
-                            customer_id,
-                            reseller_id,
-                            product_type,
-                            json.dumps(quote_result),
-                            quote_result.get('pricing_breakdown', {}).get('total_price', 0),
-                            quote_result.get('pricing_breakdown', {}).get('total_price', 0) * float(commission_rate),
-                            'active',
-                            user_id,
-                            datetime.now(timezone.utc) + timedelta(days=30)
-                        ), 'one')
-                        
-                        if save_quote_result['success']:
-                            quote_result['quote_id'] = quote_id
-                            quote_result['expires_at'] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat() + 'Z'
-                        
-                        return jsonify(quote_result)
-                    else:
-                        return jsonify(quote_result.get('error', 'Quote generation failed')), 400
-                        
                 except ImportError:
                     return jsonify('Hero service not available'), 503
             
             elif product_type in ['vsc', 'vehicle_service_contract']:
-                # Use VSC service for vehicle protection quotes
                 try:
                     from services.vsc_rating_service import VSCRatingService
                     vsc_service = VSCRatingService()
@@ -1020,151 +993,278 @@ def generate_quote_for_customer():
                         coverage_level=data.get('coverage_level', 'gold'),
                         term_months=data.get('term_months', 36),
                         deductible=data.get('deductible', 100),
-                        customer_type='wholesale'  # Wholesale pricing
+                        customer_type='wholesale'
                     )
-                    
-                    if quote_result.get('success'):
-                        # Add reseller-specific information
-                        quote_result['reseller_info'] = {
-                            'reseller_id': reseller_id,
-                            'commission_rate': float(commission_rate),
-                            'estimated_commission': quote_result.get('pricing_breakdown', {}).get('total_price', 0) * float(commission_rate)
-                        }
-                        
-                        # Save quote to database
-                        quote_id = f"QTE-VSC-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-                        save_quote_result = execute_query('''
-                            INSERT INTO quotes (
-                                quote_id, customer_id, reseller_id, product_type, quote_data,
-                                total_price, commission_amount, status, created_by, created_at, expires_at
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s)
-                            RETURNING created_at
-                        ''', (
-                            quote_id,
-                            customer_id,
-                            reseller_id,
-                            product_type,
-                            json.dumps(quote_result),
-                            quote_result.get('pricing_breakdown', {}).get('total_price', 0),
-                            quote_result.get('pricing_breakdown', {}).get('total_price', 0) * float(commission_rate),
-                            'active',
-                            user_id,
-                            datetime.now(timezone.utc) + timedelta(days=30)
-                        ), 'one')
-                        
-                        if save_quote_result['success']:
-                            quote_result['quote_id'] = quote_id
-                            quote_result['expires_at'] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat() + 'Z'
-                        
-                        return jsonify(quote_result)
-                    else:
-                        return jsonify(quote_result.get('error', 'Quote generation failed')), 400
-                        
                 except ImportError:
                     return jsonify('VSC service not available'), 503
-            
             else:
                 return jsonify(f'Unsupported product type: {product_type}'), 400
+            
+            if not quote_result or not quote_result.get('success'):
+                return jsonify(quote_result.get('error', 'Quote generation failed')), 400
+            
+            # Calculate commission
+            total_price = quote_result.get('pricing_breakdown', {}).get('total_price', 0)
+            commission_amount = total_price * float(commission_rate)
+            
+            # Generate share token if requested
+            share_token = None
+            if create_shareable:
+                share_token = execute_query('SELECT generate_quote_share_token()', (), 'one')
+                if share_token['success']:
+                    share_token = share_token['data'][0]
+            
+            # Save quote to database
+            quote_id = f"QTE-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{str(uuid.uuid4())[:8].upper()}"
+            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+            
+            save_quote_result = execute_query('''
+                INSERT INTO quotes (
+                    quote_id, customer_id, reseller_id, product_type, quote_data,
+                    total_price, commission_amount, status, created_by, created_at, 
+                    expires_at, share_token, is_shareable, shared_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s)
+                RETURNING id, share_url
+            ''', (
+                quote_id, customer_uuid, reseller_id, product_type, json.dumps(quote_result),
+                total_price, commission_amount, 'active', user_id, expires_at,
+                share_token, create_shareable, datetime.now(timezone.utc) if create_shareable else None
+            ), 'one')
+            
+            if not save_quote_result['success']:
+                return jsonify('Failed to save quote'), 500
+            
+            quote_uuid, share_url = save_quote_result['data']
+            
+            # Log quote creation activity
+            execute_query('''
+                INSERT INTO quote_activities (quote_id, activity_type, actor_type, actor_id, description, ip_address)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (
+                quote_uuid, 'created', 'reseller', user_id, 
+                f'Quote created for product type: {product_type}',
+                request.remote_addr
+            ), 'none')
+            
+            # Prepare response
+            response_data = {
+                'success': True,
+                'quote_id': quote_id,
+                'quote_uuid': str(quote_uuid),
+                'expires_at': expires_at.isoformat() + 'Z',
+                'reseller_info': {
+                    'reseller_id': str(reseller_id),
+                    'commission_rate': float(commission_rate),
+                    'estimated_commission': commission_amount
+                },
+                **quote_result
+            }
+            
+            # Add sharing info if applicable
+            if create_shareable and share_url:
+                response_data['sharing'] = {
+                    'share_token': share_token,
+                    'share_url': share_url,
+                    'shareable': True
+                }
+            
+            return jsonify(response_data)
+        
         else:
             return jsonify('Database not available'), 503
 
     except Exception as e:
         return jsonify(f'Quote generation failed: {str(e)}'), 500
 
+
+@reseller_bp.route('/quotes/<quote_id>/share', methods=['POST'])
+@token_required
+@role_required('wholesale_reseller')
+def create_shareable_quote(quote_id):
+    """Make an existing quote shareable"""
+    try:
+        user_id = request.current_user.get('user_id')
+        
+        # Check if quote exists and belongs to this reseller
+        quote_result = execute_query('''
+            SELECT id, share_token, is_shareable 
+            FROM quotes 
+            WHERE quote_id = %s AND reseller_id = %s AND status = 'active'
+        ''', (quote_id, user_id), 'one')
+        
+        if not quote_result['success'] or not quote_result['data']:
+            return jsonify('Quote not found or access denied'), 404
+        
+        quote_uuid, existing_token, is_shareable = quote_result['data']
+        
+        if is_shareable and existing_token:
+            # Already shareable, return existing info
+            share_url_result = execute_query('''
+                SELECT share_url FROM quotes WHERE id = %s
+            ''', (quote_uuid,), 'one')
+            
+            return jsonify({
+                'success': True,
+                'share_token': existing_token,
+                'share_url': share_url_result['data'][0] if share_url_result['success'] else None,
+                'message': 'Quote is already shareable'
+            })
+        
+        # Generate new share token
+        share_token_result = execute_query('SELECT generate_quote_share_token()', (), 'one')
+        if not share_token_result['success']:
+            return jsonify('Failed to generate share token'), 500
+        
+        share_token = share_token_result['data'][0]
+        
+        # Update quote to make it shareable
+        update_result = execute_query('''
+            UPDATE quotes 
+            SET share_token = %s, is_shareable = true, shared_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING share_url
+        ''', (share_token, quote_uuid), 'one')
+        
+        if not update_result['success']:
+            return jsonify('Failed to update quote'), 500
+        
+        share_url = update_result['data'][0]
+        
+        # Log sharing activity
+        execute_query('''
+            INSERT INTO quote_activities (quote_id, activity_type, actor_type, actor_id, description, ip_address)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (
+            quote_uuid, 'shared', 'reseller', user_id,
+            'Quote made shareable', request.remote_addr
+        ), 'none')
+        
+        return jsonify({
+            'success': True,
+            'share_token': share_token,
+            'share_url': share_url,
+            'message': 'Quote is now shareable'
+        })
+        
+    except Exception as e:
+        return jsonify(f'Failed to create shareable quote: {str(e)}'), 500
+
+
 @reseller_bp.route('/quotes', methods=['GET'])
 @token_required
 @role_required('wholesale_reseller')
 def get_reseller_quotes():
-    """Get quotes generated by reseller"""
+    """Get all quotes for the current reseller"""
     try:
         user_id = request.current_user.get('user_id')
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 20, type=int)
-        status_filter = request.args.get('status')
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
         
-        db_manager = get_db_manager()
+        offset = (page - 1) * limit
         
-        if db_manager.available:
-            # Get reseller ID
-            reseller_result = execute_query(
-                'SELECT reseller_id FROM resellers WHERE user_id = %s',
-                (user_id,),
-                'one'
-            )
-            
-            if reseller_result['success'] and reseller_result['data']:
-                reseller_id = reseller_result['data'][0]
-                
-                # Build query with filters
-                where_conditions = ['q.reseller_id = %s']
-                params = [reseller_id]
-                
-                if status_filter:
-                    where_conditions.append("q.status = %s")
-                    params.append(status_filter)
-                
-                where_clause = ' AND '.join(where_conditions)
-                
-                # Get quotes
-                quotes_result = execute_query(f'''
-                    SELECT 
-                        q.quote_id, q.product_type, q.total_price, q.commission_amount,
-                        q.status, q.created_at, q.expires_at, q.converted_to_policy,
-                        c.first_name || ' ' || c.last_name as customer_name,
-                        c.customer_id
-                    FROM quotes q
-                    JOIN customers c ON q.customer_id = c.customer_id
-                    WHERE {where_clause}
-                    ORDER BY q.created_at DESC
-                    LIMIT %s OFFSET %s
-                ''', tuple(params + [per_page, (page - 1) * per_page]))
-                
-                if quotes_result['success']:
-                    quotes = []
-                    for quote in quotes_result['data']:
-                        quote_dict = {
-                            'quote_id': quote[0],
-                            'product_type': quote[1],
-                            'total_price': float(quote[2]) if quote[2] else 0.0,
-                            'commission_amount': float(quote[3]) if quote[3] else 0.0,
-                            'status': quote[4],
-                            'created_at': quote[5].isoformat() if quote[5] else None,
-                            'expires_at': quote[6].isoformat() if quote[6] else None,
-                            'converted_to_policy': quote[7],
-                            'customer_name': quote[8],
-                            'customer_id': quote[9]
-                        }
-                        
-                        # Calculate days until expiration
-                        if quote[6]:  # expires_at
-                            days_until_expiry = (quote[6].date() - datetime.now().date()).days
-                            quote_dict['days_until_expiry'] = days_until_expiry
-                            quote_dict['is_expired'] = days_until_expiry < 0
-                        
-                        quotes.append(quote_dict)
-                    
-                    return jsonify({
-                        'quotes': quotes,
-                        'pagination': {
-                            'page': page,
-                            'per_page': per_page,
-                            'total': len(quotes)
-                        }
-                    })
-                else:
-                    return jsonify('Failed to fetch quotes'), 500
-            else:
-                return jsonify('Reseller record not found'), 404
-        else:
-            return jsonify({
-                'quotes': [],
-                'pagination': {'page': 1, 'per_page': per_page, 'total': 0, 'pages': 0},
-                'source': 'database_unavailable'
-            })
-
+        # Build query based on status filter
+        status_condition = ""
+        params = [user_id, limit, offset]
+        
+        if status != 'all':
+            status_condition = "AND q.status = %s"
+            params.insert(1, status)
+        
+        quotes_result = execute_query(f'''
+            SELECT q.quote_id, q.product_type, q.total_price, q.commission_amount, 
+                   q.status, q.created_at, q.expires_at, q.is_shareable, q.share_url,
+                   q.converted_to_policy, c.personal_info->>'first_name' as customer_first_name,
+                   c.personal_info->>'last_name' as customer_last_name,
+                   c.contact_info->>'email' as customer_email
+            FROM quotes q
+            JOIN customers c ON q.customer_id = c.id
+            WHERE q.reseller_id = %s {status_condition}
+            ORDER BY q.created_at DESC
+            LIMIT %s OFFSET %s
+        ''', tuple(params), 'all')
+        
+        if not quotes_result['success']:
+            return jsonify('Failed to fetch quotes'), 500
+        
+        # Get total count for pagination
+        count_params = [user_id]
+        if status != 'all':
+            count_params.append(status)
+        
+        count_result = execute_query(f'''
+            SELECT COUNT(*) as total 
+            FROM quotes 
+            WHERE reseller_id = %s {status_condition}
+        ''', tuple(count_params), 'one')
+        
+        total_quotes = count_result['data'][0] if count_result['success'] else 0
+        
+        return jsonify({
+            'success': True,
+            'quotes': quotes_result['data'] or [],
+            'pagination': {
+                'current_page': page,
+                'total_pages': (total_quotes + limit - 1) // limit,
+                'total_items': total_quotes,
+                'items_per_page': limit
+            }
+        })
+        
     except Exception as e:
-        return jsonify(f'Failed to get quotes: {str(e)}'), 500
+        return jsonify(f'Failed to fetch quotes: {str(e)}'), 500
+
+
+@reseller_bp.route('/sales/dashboard', methods=['GET'])
+@token_required
+@role_required('wholesale_reseller')
+def get_sales_dashboard():
+    """Get sales dashboard data for reseller"""
+    try:
+        user_id = request.current_user.get('user_id')
+        
+        # Get dashboard stats from the view we created
+        stats_result = execute_query('''
+            SELECT * FROM reseller_dashboard_stats WHERE reseller_id = %s
+        ''', (user_id,), 'one')
+        
+        if not stats_result['success']:
+            return jsonify('Failed to fetch dashboard stats'), 500
+        
+        # Get recent sales
+        recent_sales_result = execute_query('''
+            SELECT rs.sale_date, rs.product_type, rs.gross_amount, rs.commission_amount,
+                   rs.commission_status, c.personal_info->>'first_name' as customer_first_name,
+                   c.personal_info->>'last_name' as customer_last_name
+            FROM reseller_sales rs
+            JOIN customers c ON rs.customer_id = c.id
+            WHERE rs.reseller_id = %s
+            ORDER BY rs.sale_date DESC
+            LIMIT 10
+        ''', (user_id,), 'all')
+        
+        # Get monthly commission summary
+        monthly_summary_result = execute_query('''
+            SELECT DATE_TRUNC('month', sale_date) as month,
+                   COUNT(*) as sales_count,
+                   SUM(gross_amount) as total_sales,
+                   SUM(commission_amount) as total_commission
+            FROM reseller_sales
+            WHERE reseller_id = %s AND sale_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '11 months'
+            GROUP BY DATE_TRUNC('month', sale_date)
+            ORDER BY month DESC
+        ''', (user_id,), 'all')
+        
+        return jsonify({
+            'success': True,
+            'stats': stats_result['data'],
+            'recent_sales': recent_sales_result['data'] or [],
+            'monthly_summary': monthly_summary_result['data'] or []
+        })
+        
+    except Exception as e:
+        return jsonify(f'Failed to fetch dashboard data: {str(e)}'), 500
 
 # ================================
 # RESELLER TOOLS & RESOURCES
@@ -1725,3 +1825,207 @@ def get_reseller_analytics():
 
     except Exception as e:
         return jsonify(f'Failed to get analytics: {str(e)}'), 500
+
+
+@reseller_bp.route('/quotes/<quote_id>', methods=['GET'])
+@token_required
+@role_required('wholesale_reseller')
+def get_quote_details(quote_id):
+    """Get detailed information about a specific quote"""
+    try:
+        user_id = request.current_user.get('user_id')
+        
+        quote_result = execute_query('''
+            SELECT q.quote_id, q.product_type, q.quote_data, q.total_price, q.commission_amount,
+                   q.status, q.created_at, q.expires_at, q.is_shareable, q.share_url,
+                   q.converted_to_policy, q.converted_at, q.customer_accessed_at,
+                   c.personal_info, c.contact_info, c.business_info,
+                   r.business_name as reseller_name
+            FROM quotes q
+            JOIN customers c ON q.customer_id = c.id
+            JOIN resellers r ON q.reseller_id = r.user_id
+            WHERE q.quote_id = %s AND q.reseller_id = %s
+        ''', (quote_id, user_id), 'one')
+        
+        if not quote_result['success'] or not quote_result['data']:
+            return jsonify('Quote not found'), 404
+        
+        quote_data = quote_result['data']
+        
+        # Get quote activities
+        activities_result = execute_query('''
+            SELECT activity_type, actor_type, description, created_at, ip_address
+            FROM quote_activities
+            WHERE quote_id = (SELECT id FROM quotes WHERE quote_id = %s)
+            ORDER BY created_at DESC
+        ''', (quote_id,), 'all')
+        
+        return jsonify({
+            'success': True,
+            'quote': {
+                'quote_id': quote_data[0],
+                'product_type': quote_data[1],
+                'quote_data': json.loads(quote_data[2]) if quote_data[2] else {},
+                'total_price': float(quote_data[3]),
+                'commission_amount': float(quote_data[4]),
+                'status': quote_data[5],
+                'created_at': quote_data[6].isoformat() + 'Z',
+                'expires_at': quote_data[7].isoformat() + 'Z' if quote_data[7] else None,
+                'is_shareable': quote_data[8],
+                'share_url': quote_data[9],
+                'converted_to_policy': quote_data[10],
+                'converted_at': quote_data[11].isoformat() + 'Z' if quote_data[11] else None,
+                'customer_accessed_at': quote_data[12].isoformat() + 'Z' if quote_data[12] else None,
+                'customer_info': {
+                    'personal': json.loads(quote_data[13]) if quote_data[13] else {},
+                    'contact': json.loads(quote_data[14]) if quote_data[14] else {},
+                    'business': json.loads(quote_data[15]) if quote_data[15] else {}
+                }
+            },
+            'activities': activities_result['data'] or []
+        })
+        
+    except Exception as e:
+        return jsonify(f'Failed to fetch quote details: {str(e)}'), 500
+
+
+@reseller_bp.route('/quotes/<quote_id>/duplicate', methods=['POST'])
+@token_required
+@role_required('wholesale_reseller')
+def duplicate_quote(quote_id):
+    """Create a duplicate of an existing quote with optional modifications"""
+    try:
+        user_id = request.current_user.get('user_id')
+        data = request.get_json() or {}
+        
+        # Get original quote
+        original_quote_result = execute_query('''
+            SELECT customer_id, product_type, quote_data, reseller_id
+            FROM quotes
+            WHERE quote_id = %s AND reseller_id = %s
+        ''', (quote_id, user_id), 'one')
+        
+        if not original_quote_result['success'] or not original_quote_result['data']:
+            return jsonify('Original quote not found'), 404
+        
+        customer_id, product_type, quote_data_str, reseller_id = original_quote_result['data']
+        original_quote_data = json.loads(quote_data_str) if quote_data_str else {}
+        
+        # Merge original data with any modifications
+        new_quote_data = {**original_quote_data}
+        if 'modifications' in data:
+            new_quote_data.update(data['modifications'])
+        
+        # Generate new quote using the original parameters
+        # This would call the same quote generation logic as before
+        # For simplicity, we'll create a basic duplicate
+        
+        new_quote_id = f"QTE-DUP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+        
+        # Get commission rate
+        commission_result = execute_query('''
+            SELECT commission_rate FROM resellers WHERE user_id = %s
+        ''', (reseller_id,), 'one')
+        
+        commission_rate = commission_result['data'][0] if commission_result['success'] else 0.05
+        total_price = original_quote_data.get('pricing_breakdown', {}).get('total_price', 0)
+        commission_amount = total_price * float(commission_rate)
+        
+        # Create duplicate quote
+        duplicate_result = execute_query('''
+            INSERT INTO quotes (
+                quote_id, customer_id, reseller_id, product_type, quote_data,
+                total_price, commission_amount, status, created_by, expires_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        ''', (
+            new_quote_id, customer_id, reseller_id, product_type, json.dumps(new_quote_data),
+            total_price, commission_amount, 'active', user_id, expires_at
+        ), 'one')
+        
+        if duplicate_result['success']:
+            quote_uuid = duplicate_result['data'][0]
+            
+            # Log duplication activity
+            execute_query('''
+                INSERT INTO quote_activities (quote_id, activity_type, actor_type, actor_id, description)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (
+                quote_uuid, 'created', 'reseller', user_id,
+                f'Quote duplicated from {quote_id}'
+            ), 'none')
+            
+            return jsonify({
+                'success': True,
+                'new_quote_id': new_quote_id,
+                'message': 'Quote duplicated successfully'
+            })
+        
+        return jsonify('Failed to duplicate quote'), 500
+        
+    except Exception as e:
+        return jsonify(f'Failed to duplicate quote: {str(e)}'), 500
+
+
+@reseller_bp.route('/sales/commissions', methods=['GET'])
+@token_required
+@role_required('wholesale_reseller')
+def get_commission_history():
+    """Get commission payment history"""
+    try:
+        user_id = request.current_user.get('user_id')
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
+        
+        offset = (page - 1) * limit
+        
+        # Build query
+        status_condition = ""
+        params = [user_id, limit, offset]
+        
+        if status != 'all':
+            status_condition = "AND commission_status = %s"
+            params.insert(1, status)
+        
+        commissions_result = execute_query(f'''
+            SELECT rs.sale_date, rs.product_type, rs.gross_amount, rs.commission_amount,
+                   rs.commission_status, rs.payment_date, rs.sale_type,
+                   c.personal_info->>'first_name' as customer_first_name,
+                   c.personal_info->>'last_name' as customer_last_name,
+                   q.quote_id
+            FROM reseller_sales rs
+            JOIN customers c ON rs.customer_id = c.id
+            LEFT JOIN quotes q ON rs.quote_id = q.id
+            WHERE rs.reseller_id = %s {status_condition}
+            ORDER BY rs.sale_date DESC
+            LIMIT %s OFFSET %s
+        ''', tuple(params), 'all')
+        
+        # Get summary
+        summary_result = execute_query(f'''
+            SELECT 
+                COUNT(*) as total_sales,
+                SUM(commission_amount) as total_commission,
+                SUM(CASE WHEN commission_status = 'paid' THEN commission_amount ELSE 0 END) as paid_commission,
+                SUM(CASE WHEN commission_status = 'pending' THEN commission_amount ELSE 0 END) as pending_commission
+            FROM reseller_sales 
+            WHERE reseller_id = %s {status_condition.replace('AND ', 'AND ')}
+        ''', [user_id] + ([status] if status != 'all' else []), 'one')
+        
+        return jsonify({
+            'success': True,
+            'commissions': commissions_result['data'] or [],
+            'summary': summary_result['data'] if summary_result['success'] else {},
+            'pagination': {
+                'current_page': page,
+                'items_per_page': limit
+            }
+        })
+        
+    except Exception as e:
+        return jsonify(f'Failed to fetch commission history: {str(e)}'), 500
+    
+

@@ -538,3 +538,68 @@ def get_active_sessions():
 
     except Exception as e:
         return jsonify(f'Failed to get sessions: {str(e)}'), 500
+    
+
+# Add these debug endpoints to your user_auth_endpoints.py file
+
+@user_auth_bp.route('/debug/test-password', methods=['POST'])
+def test_password():
+    """Debug endpoint to test password verification"""
+    try:
+        data = request.get_json()
+        password = data.get('password', 'Admin123!')
+        
+        # Test the password hashing and verification
+        result = UserAuth.test_password_hash()
+        
+        return jsonify({
+            'message': 'Password test completed',
+            'test_result': result,
+            'password_tested': password
+        })
+        
+    except Exception as e:
+        return jsonify(f'Password test failed: {str(e)}'), 500
+
+@user_auth_bp.route('/debug/hash-password', methods=['POST'])
+def hash_password_debug():
+    """Debug endpoint to generate a hash for a given password"""
+    try:
+        data = request.get_json()
+        password = data.get('password')
+        
+        if not password:
+            return jsonify('Password is required'), 400
+            
+        hashed = UserAuth.hash_password(password)
+        
+        return jsonify({
+            'original_password': password,
+            'hashed_password': hashed,
+            'verification_test': UserAuth.verify_password(password, hashed)
+        })
+        
+    except Exception as e:
+        return jsonify(f'Hash generation failed: {str(e)}'), 500
+
+@user_auth_bp.route('/debug/verify-password', methods=['POST'])
+def verify_password_debug():
+    """Debug endpoint to verify a password against a hash"""
+    try:
+        data = request.get_json()
+        password = data.get('password')
+        hash_value = data.get('hash')
+        
+        if not password or not hash_value:
+            return jsonify('Password and hash are required'), 400
+            
+        result = UserAuth.verify_password(password, hash_value)
+        
+        return jsonify({
+            'password': password,
+            'hash': hash_value,
+            'verification_result': result
+        })
+        
+    except Exception as e:
+        return jsonify(f'Verification failed: {str(e)}'), 500

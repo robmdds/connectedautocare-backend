@@ -7,8 +7,10 @@ Modular Flask application with organized endpoint blueprints
 import os
 import sys
 from datetime import datetime, timezone
-from flask import Flask, jsonify, Blueprint
+from flask import Flask, jsonify, Blueprint, request
 from flask_cors import CORS
+import json
+from utils.database import execute_query
 
 # Add the current directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +39,9 @@ try:
     from endpoints.video_public_endpoints import video_public_bp 
     from endpoints.pricing_endpoints import pricing_bp
     from endpoints.analytics_endpoints import analytics_bp
+    from admin.contract_management import contract_bp
+    from endpoints.tpa_endpoints import tpa_bp
+    from endpoints.contact_endpoints import contact_bp
     ENDPOINTS_AVAILABLE = True
 except ImportError:
     ENDPOINTS_AVAILABLE = False
@@ -55,6 +60,9 @@ except ImportError:
     video_public_bp = Blueprint('video_public_fallback', __name__)
     pricing_bp = Blueprint('pricing_fallback', __name__)
     analytics_bp = Blueprint('analytics_fallback', __name__)
+    contract_bp = Blueprint('contract_fallback', __name__)
+    tpa_bp = Blueprint('tpa_fallback', __name__)
+    contact_bp = Blueprint('contact_fallback', __name__)
     
     # Add essential fallback routes
     @health_bp.route('/health')
@@ -134,9 +142,17 @@ def register_blueprints(app):
         # Analytics endpoints
         app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
         
+        # Contract endpoints
+        app.register_blueprint(contract_bp, url_prefix='/api/admin/contracts')
+        
         # Video endpoints - Admin routes
         app.register_blueprint(video_bp, url_prefix='/api/admin/video')
         
+        # tpa endpoints
+        app.register_blueprint(tpa_bp, url_prefix='/api/admin/tpas')
+        
+        # Contact endpoints
+        app.register_blueprint(contact_bp, url_prefix='/api/contact')
         # Video endpoints - Public routes
         app.register_blueprint(video_public_bp, url_prefix='/api')
         
@@ -255,6 +271,138 @@ def api_status():
         },
         "endpoints_available": ENDPOINTS_AVAILABLE
     })
+
+
+@app.route('/quote/<share_token>', methods=['GET'])
+def view_shared_quote(share_token):
+    """Public endpoint for customers to view shared quotes"""
+    try:
+        # Find quote by share token
+        quote_result = execute_query('''
+            SELECT q.quote_id, q.product_type, q.quote_data, q.total_price, 
+                   q.expires_at, q.status, c.personal_info, c.contact_info,
+                   r.business_name as reseller_name
+            FROM quotes q
+            JOIN customers c ON q.customer_id = c.id
+            JOIN resellers r ON q.reseller_id = r.user_id
+            WHERE q.share_token = %s AND q.is_shareable = true AND q.status = 'active'
+        ''', (share_token,), 'one')
+        
+        if not quote_result['success'] or not quote_result['data']:
+            return jsonify('Quote not found or no longer available'), 404
+        
+        quote_data = quote_result['data']
+        
+        # Check if quote has expired
+        if quote_data[4] and datetime.now(timezone.utc) > quote_data[4]:
+            return jsonify('Quote has expired'), 410
+        
+        # Log quote view activity
+        quote_uuid_result = execute_query('''
+            SELECT id FROM quotes WHERE share_token = %s
+        ''', (share_token,), 'one')
+        
+        if quote_uuid_result['success']:
+            execute_query('''
+                INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address, user_agent)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (
+                quote_uuid_result['data'][0], 'viewed', 'customer',
+                'Quote viewed via shared link', request.remote_addr, request.user_agent.string
+            ), 'none')
+            
+            # Update customer_accessed_at
+            execute_query('''
+                UPDATE quotes SET customer_accessed_at = CURRENT_TIMESTAMP, customer_ip_address = %s
+                WHERE share_token = %s
+            ''', (request.remote_addr, share_token), 'none')
+        
+        # Prepare response (remove sensitive data)
+        response_data = {
+            'quote_id': quote_data[0],
+            'product_type': quote_data[1],
+            'quote_details': json.loads(quote_data[2]) if quote_data[2] else {},
+            'total_price': float(quote_data[3]),
+            'expires_at': quote_data[4].isoformat() + 'Z' if quote_data[4] else None,
+            'customer_info': json.loads(quote_data[5]) if quote_data[5] else {},
+            'reseller_name': quote_data[7]
+        }
+        
+        return jsonify({
+            'success': True,
+            'quote': response_data
+        })
+        
+    except Exception as e:
+        return jsonify(f'Failed to fetch quote: {str(e)}'), 500
+
+
+@app.route('/quote/<share_token>/accept', methods=['POST'])
+def accept_shared_quote(share_token):
+    """Endpoint for customers to accept/purchase from shared quote"""
+    try:
+        data = request.get_json()
+        
+        # Find and validate quote
+        quote_result = execute_query('''
+            SELECT q.id, q.quote_id, q.customer_id, q.reseller_id, q.total_price, 
+                   q.commission_amount, q.product_type, q.quote_data, q.expires_at
+            FROM quotes q
+            WHERE q.share_token = %s AND q.is_shareable = true AND q.status = 'active'
+        ''', (share_token,), 'one')
+        
+        if not quote_result['success'] or not quote_result['data']:
+            return jsonify('Quote not found or no longer available'), 404
+        
+        quote_info = quote_result['data']
+        
+        # Check if expired
+        if quote_info[8] and datetime.now(timezone.utc) > quote_info[8]:
+            return jsonify('Quote has expired'), 410
+        
+        # Here you would integrate with your payment processing
+        # For now, we'll simulate a successful transaction
+        
+        # Create policy (you'll need to implement this based on your policy creation logic)
+        # policy_result = create_policy_from_quote(quote_info, data)
+        
+        # For demonstration, we'll mark the quote as converted
+        execute_query('''
+            UPDATE quotes 
+            SET converted_to_policy = true, converted_at = CURRENT_TIMESTAMP, status = 'converted'
+            WHERE id = %s
+        ''', (quote_info[0],), 'none')
+        
+        # Create sales record
+        execute_query('''
+            INSERT INTO reseller_sales (
+                reseller_id, quote_id, customer_id, sale_type, product_type,
+                gross_amount, commission_rate, commission_amount, commission_status, sale_date
+            )
+            SELECT %s, %s, %s, %s, %s, %s, r.commission_rate, %s, %s, CURRENT_DATE
+            FROM resellers r WHERE r.user_id = %s
+        ''', (
+            quote_info[3], quote_info[0], quote_info[2], 'quote_conversion', quote_info[6],
+            quote_info[4], quote_info[5], 'pending', quote_info[3]
+        ), 'none')
+        
+        # Log conversion activity
+        execute_query('''
+            INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (
+            quote_info[0], 'converted', 'customer',
+            'Quote converted to policy via shared link', request.remote_addr
+        ), 'none')
+        
+        return jsonify({
+            'success': True,
+            'message': 'Quote accepted successfully',
+            'quote_id': quote_info[1]
+        })
+        
+    except Exception as e:
+        return jsonify(f'Failed to accept quote: {str(e)}'), 500
 
 # For local development only
 if __name__ == '__main__':

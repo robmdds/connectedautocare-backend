@@ -3,12 +3,12 @@
 📍 Host: ep-tiny-water-adje4r08-pooler.c-2.us-east-1.aws.neon.tech
 🏷️  Database: neondb
 👤 User: neondb_owner
-💾 Size: 9144 kB
+💾 Size: 9560 kB
 
 📊 SUMMARY
 --------------------
-Tables: 22
-Views: 0
+Tables: 28
+Views: 1
 Schemas: public
 
 📋 TABLE: public.admin_settings (BASE TABLE)
@@ -32,6 +32,150 @@ Foreign Keys:
 Indexes (2):
   • admin_settings_pkey (btree)
   • admin_settings_category_key_key (btree)
+
+
+📋 TABLE: public.contract_activities (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 24 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • contract_id - uuid NULL
+  • activity_type - character varying NOT NULL
+  • description - text NULL
+  • performed_by - uuid NULL
+  • performed_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • metadata - jsonb NULL
+
+Foreign Keys:
+  • contract_id → public.generated_contracts.id
+  • performed_by → public.users.id
+
+Indexes (2):
+  • contract_activities_pkey (btree)
+  • idx_contract_activities_contract_id (btree)
+
+
+📋 TABLE: public.contract_signatures (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 24 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • contract_id - uuid NULL
+  • signer_type - character varying NOT NULL
+  • signer_name - character varying NOT NULL
+  • signer_email - character varying NULL
+  • signature_method - character varying NULL
+  • signed_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • signature_data - jsonb NULL
+  • status - character varying NULL DEFAULT 'pending'::character varying
+
+Foreign Keys:
+  • contract_id → public.generated_contracts.id
+
+Indexes (2):
+  • contract_signatures_pkey (btree)
+  • idx_contract_signatures_contract_id (btree)
+
+
+📋 TABLE: public.contract_stats (VIEW)
+----------------------------------------
+Rows: 1
+Size: 0 bytes
+
+Columns:
+  • active_templates - bigint NULL
+  • inactive_templates - bigint NULL
+  • product_types - bigint NULL
+  • total_contracts - bigint NULL
+  • active_contracts - bigint NULL
+  • contracts_today - bigint NULL
+  • total_uploads - bigint NULL
+  • uploads_today - bigint NULL
+
+
+📋 TABLE: public.contract_template_files (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 16 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • template_id - uuid NULL
+  • filename - character varying NOT NULL
+  • original_filename - character varying NOT NULL
+  • file_path - character varying NULL
+  • file_size - integer NULL
+  • mime_type - character varying NULL
+  • upload_date - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • uploaded_by - uuid NULL
+  • status - character varying NULL DEFAULT 'uploaded'::character varying
+
+Foreign Keys:
+  • template_id → public.contract_templates.id
+  • uploaded_by → public.users.id
+
+Indexes (1):
+  • contract_template_files_pkey (btree)
+
+
+📋 TABLE: public.contract_templates (BASE TABLE)
+----------------------------------------
+Rows: 2
+Size: 80 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • template_id - character varying NOT NULL
+  • name - character varying NOT NULL
+  • product_type - character varying NOT NULL
+  • product_id - character varying NOT NULL
+  • template_file - character varying NULL
+  • fields - jsonb NOT NULL DEFAULT '[]'::jsonb
+  • active - boolean NULL DEFAULT true
+  • created_by - uuid NULL
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Foreign Keys:
+  • created_by → public.users.id
+
+Indexes (4):
+  • contract_templates_pkey (btree)
+  • contract_templates_template_id_key (btree)
+  • idx_contract_templates_product_type (btree)
+  • idx_contract_templates_active (btree)
+
+
+📋 TABLE: public.contract_versions (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 24 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • contract_id - uuid NULL
+  • version_number - integer NOT NULL
+  • changes - jsonb NULL
+  • file_path - character varying NULL
+  • created_by - uuid NULL
+  • created_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Foreign Keys:
+  • contract_id → public.generated_contracts.id
+  • created_by → public.users.id
+
+Indexes (2):
+  • contract_versions_pkey (btree)
+  • contract_versions_contract_id_version_number_key (btree)
 
 
 📋 TABLE: public.customers (BASE TABLE)
@@ -59,9 +203,11 @@ Columns:
   • status - character varying NULL DEFAULT 'active'::character varying
   • notes - jsonb NULL DEFAULT '[]'::jsonb
   • assigned_agent - character varying NULL
+  • reseller_id - uuid NULL
 
 Foreign Keys:
   • user_id → public.users.id
+  • reseller_id → public.resellers.user_id
 
 Indexes (1):
   • customers_pkey (btree)
@@ -86,6 +232,45 @@ Columns:
 
 Indexes (1):
   • dealers_pkey (btree)
+
+
+📋 TABLE: public.generated_contracts (BASE TABLE)
+----------------------------------------
+Rows: 0
+Size: 64 kB
+Primary Key(s): id
+
+Columns:
+  • id - uuid NOT NULL DEFAULT gen_random_uuid() 🔑
+  • contract_number - character varying NULL
+  • template_id - uuid NULL
+  • customer_id - uuid NULL
+  • reseller_id - uuid NULL
+  • customer_data - jsonb NOT NULL DEFAULT '{}'::jsonb
+  • contract_data - jsonb NULL DEFAULT '{}'::jsonb
+  • status - character varying NULL DEFAULT 'draft'::character varying
+  • generated_date - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  • effective_date - date NULL
+  • expiration_date - date NULL
+  • file_path - character varying NULL
+  • signed_file_path - character varying NULL
+  • created_by - uuid NULL
+  • updated_at - timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+
+Foreign Keys:
+  • template_id → public.contract_templates.id
+  • customer_id → public.customers.id
+  • reseller_id → public.resellers.user_id
+  • created_by → public.users.id
+
+Indexes (7):
+  • generated_contracts_pkey (btree)
+  • generated_contracts_contract_number_key (btree)
+  • idx_generated_contracts_template_id (btree)
+  • idx_generated_contracts_customer_id (btree)
+  • idx_generated_contracts_reseller_id (btree)
+  • idx_generated_contracts_status (btree)
+  • idx_generated_contracts_effective_date (btree)
 
 
 📋 TABLE: public.policies (BASE TABLE)
@@ -115,8 +300,8 @@ Columns:
   • renewal_info - jsonb NULL DEFAULT '{}'::jsonb
 
 Foreign Keys:
-  • created_by → public.users.id
   • customer_id → public.customers.id
+  • created_by → public.users.id
 
 Indexes (2):
   • policies_pkey (btree)
@@ -197,7 +382,7 @@ Indexes (5):
 📋 TABLE: public.resellers (BASE TABLE)
 ----------------------------------------
 Rows: 1
-Size: 32 kB
+Size: 48 kB
 Primary Key(s): id
 
 Columns:
@@ -224,8 +409,9 @@ Foreign Keys:
   • user_id → public.users.id
   • approved_by → public.users.id
 
-Indexes (1):
+Indexes (2):
   • resellers_pkey (btree)
+  • resellers_user_id_unique (btree)
 
 
 📋 TABLE: public.settings (BASE TABLE)
@@ -291,9 +477,9 @@ Columns:
   • taxes - jsonb NULL DEFAULT '{}'::jsonb
 
 Foreign Keys:
-  • created_by → public.users.id
   • customer_id → public.customers.id
   • policy_id → public.policies.id
+  • created_by → public.users.id
 
 Indexes (2):
   • transactions_pkey (btree)
@@ -471,8 +657,8 @@ Columns:
   • created_by - uuid NULL
 
 Foreign Keys:
-  • created_by → public.users.id
   • customer_id → public.customers.id
+  • created_by → public.users.id
   • coverage_level → public.vsc_coverage_levels.level_code
 
 Indexes (2):

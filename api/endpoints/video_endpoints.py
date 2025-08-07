@@ -206,7 +206,7 @@ def delete_from_vercel_blob(file_url):
 # ADMIN VIDEO ENDPOINTS
 # ================================
 
-@video_bp.route('/admin/upload', methods=['POST'])
+@video_bp.route('/upload', methods=['POST'])
 def upload_video():
     """Upload video file and thumbnail to Vercel Blob Storage"""
     try:
@@ -417,7 +417,7 @@ def upload_video():
 
         return jsonify({'error': f"Upload failed: {str(e)}"}), 500
 
-@video_bp.route('/admin/delete', methods=['DELETE'])
+@video_bp.route('/delete', methods=['DELETE'])
 def delete_video():
     """Delete current video and thumbnail from Vercel Blob"""
     try:
@@ -511,7 +511,7 @@ def delete_video():
         print(f"Full traceback: {traceback.format_exc()}")
         return jsonify({'error': f"Deletion failed: {str(e)}"}), 500
 
-@video_bp.route('/admin/health')
+@video_bp.route('/health')
 def video_service_health():
     """Check video upload service health"""
     try:
@@ -543,7 +543,7 @@ def video_service_health():
     except Exception as e:
         return jsonify({'error': f"Health check failed: {str(e)}"}), 500
 
-@video_bp.route('/admin', methods=['GET'])
+@video_bp.route('/', methods=['GET'])
 def get_admin_landing_video():
     """Get current landing page video from database (admin view)"""
     try:
@@ -639,7 +639,7 @@ def get_admin_landing_video():
         print(f"Full traceback: {traceback.format_exc()}")
         return jsonify({'error': f"Failed to get video: {str(e)}"}), 500
 
-@video_bp.route('/admin', methods=['PUT'])
+@video_bp.route('/', methods=['PUT'])
 def update_landing_video():
     """Update landing page video in database"""
     try:

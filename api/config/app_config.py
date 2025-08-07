@@ -11,11 +11,15 @@ class AppConfig:
     """Centralized application configuration"""
     
     def __init__(self):
+        from dotenv import load_dotenv
+        load_dotenv()
+
         # Database configuration
         self.DATABASE_URL = os.environ.get('DATABASE_URL')
         
         # Vercel Blob Storage
         self.VERCEL_BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN')
+        print(f"Vercel Blob Read/Write Token: {self.VERCEL_BLOB_READ_WRITE_TOKEN}")
         
         # File upload settings
         self.ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'webm', 'mov', 'avi'}

@@ -37,19 +37,34 @@ class DatabaseUserAuth:
     
     @staticmethod
     def verify_password(password, hashed):
-        """Verify password against hash"""
-        try:
-            return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+        """Verify password against hash with detailed logging"""
+        try:            
+            # Handle both string and bytes
+            if isinstance(password, str):
+                password_bytes = password.encode('utf-8')
+            else:
+                password_bytes = password
+                
+            if isinstance(hashed, str):
+                hashed_bytes = hashed.encode('utf-8')
+            else:
+                hashed_bytes = hashed
+            
+            result = bcrypt.checkpw(password_bytes, hashed_bytes)
+            return result
+            
         except Exception as e:
             print(f"Password verification error: {e}")
+            print(f"  - Exception type: {type(e)}")
             return False
     
     @staticmethod
     def authenticate_user(email, password):
-        """Authenticate user against database"""
-        try:
+        """Authenticate user against database with enhanced debugging"""
+        try:            
             db_manager = get_db_manager()
             if not db_manager.available:
+                print("Database not available")
                 return None, "Database not available"
             
             # Get user from database
@@ -61,12 +76,16 @@ class DatabaseUserAuth:
             ''', (email.lower().strip(),), 'one')
             
             if not result['success'] or not result['data']:
+                print("User not found or query failed")
                 return None, "Invalid credentials"
             
             user = result['data']
             
-            # Verify password
-            if not DatabaseUserAuth.verify_password(password, user['password_hash']):
+            # Verify password with detailed logging
+            password_valid = DatabaseUserAuth.verify_password(password, user['password_hash'])
+            
+            if not password_valid:
+                print("Password verification failed")
                 return None, "Invalid credentials"
             
             # Update login statistics
@@ -81,7 +100,6 @@ class DatabaseUserAuth:
             }
             
             token = DatabaseUserAuth.generate_token(user_data)
-            
             return {
                 'token': token,
                 'user': user_data
@@ -89,6 +107,8 @@ class DatabaseUserAuth:
             
         except Exception as e:
             print(f"Authentication error: {e}")
+            import traceback
+            traceback.print_exc()
             return None, f"Authentication failed: {str(e)}"
     
     @staticmethod
@@ -97,16 +117,19 @@ class DatabaseUserAuth:
         try:
             db_manager = get_db_manager()
             if db_manager.available:
-                db_manager.update_record(
-                    'users',
-                    {
-                        'last_login': datetime.datetime.utcnow(),
-                        'login_count': 'login_count + 1',  # PostgreSQL expression
-                        'updated_at': datetime.datetime.utcnow()
-                    },
-                    'id = %s',
-                    (user_id,)
-                )
+                # Use raw SQL execution for PostgreSQL expressions
+                result = execute_query('''
+                    UPDATE users 
+                    SET last_login = %s, 
+                        login_count = COALESCE(login_count, 0) + 1,
+                        updated_at = %s
+                    WHERE id = %s
+                ''', (
+                    datetime.datetime.utcnow(),
+                    datetime.datetime.utcnow(), 
+                    user_id
+                ))
+                print(f"Login stats update result: {result}")
         except Exception as e:
             print(f"Login stats update error: {e}")
     
@@ -178,6 +201,20 @@ class DatabaseUserAuth:
             if not db_manager.available:
                 return None, "Database not available"
             
+            # Validate email format
+            import re
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, email):
+                return None, "Invalid email format"
+            
+            # Validate password strength
+            if len(password) < 8:
+                return None, "Password must be at least 8 characters long"
+            
+            # Validate role
+            if role not in DatabaseUserAuth.ROLES:
+                return None, "Invalid role"
+            
             # Check if user already exists
             existing = execute_query(
                 'SELECT id FROM users WHERE email = %s',
@@ -196,6 +233,7 @@ class DatabaseUserAuth:
                 'role': role,
                 'status': 'active',
                 'profile': profile or {},
+                'login_count': 0,
                 'created_at': datetime.datetime.utcnow(),
                 'updated_at': datetime.datetime.utcnow()
             }
