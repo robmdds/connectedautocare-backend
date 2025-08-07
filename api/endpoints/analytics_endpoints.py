@@ -5,7 +5,7 @@ KPI dashboards, business reports, and data analytics
 
 from flask import Blueprint, request, jsonify, make_response
 from datetime import datetime, timezone, timedelta
-from utils.auth_decorators import token_required, role_required
+from auth.user_auth import token_required, role_required
 from utils.database import get_db_manager, execute_query, paginate_query
 
 # Initialize blueprint

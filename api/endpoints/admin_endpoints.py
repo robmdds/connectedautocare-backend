@@ -6,8 +6,6 @@ User management, system settings, and administrative functions
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone
 import uuid
-from utils.response_helpers import success_response, error_response
-from utils.auth_decorators import token_required, role_required
 from utils.database import get_db_manager, execute_query
 from utils.service_availability import ServiceChecker
 
@@ -16,7 +14,7 @@ admin_bp = Blueprint('admin', __name__)
 
 # Import admin services with error handling
 try:
-    from auth.user_auth import UserAuth, SecurityUtils
+    from auth.user_auth import token_required, role_required, SecurityUtils
     from models.database_models import UserModel, DatabaseUtils
     admin_services_available = True
     
@@ -136,7 +134,7 @@ def get_all_users():
                     user_dict['last_login'] = user_dict['last_login'].isoformat() if user_dict['last_login'] else None
                     users.append(user_dict)
                 
-                return jsonify(success_response({
+                return jsonify({
                     'users': users,
                     'pagination': {
                         'page': page,
@@ -149,9 +147,9 @@ def get_all_users():
                         'status': status_filter,
                         'search': search_term
                     }
-                }))
+                })
             else:
-                return jsonify(error_response('Failed to fetch users from database')), 500
+                return jsonify('Failed to fetch users from database'), 500
         else:
             # Fallback to in-memory users
             users_list = []
@@ -167,14 +165,14 @@ def get_all_users():
                 }
                 users_list.append(user_data)
             
-            return jsonify(success_response({
+            return jsonify({
                 'users': users_list,
                 'total': len(users_list),
                 'source': 'in_memory'
-            }))
+            })
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to get users: {str(e)}')), 500
+        return jsonify(f'Failed to get users: {str(e)}'), 500
 
 @admin_bp.route('/users/<user_id>', methods=['GET'])
 @token_required
@@ -229,19 +227,19 @@ def get_user_details(user_id):
                 user['recent_transactions'] = recent_transactions
                 user['total_spent'] = float(user['total_spent'])
                 
-                return jsonify(success_response(user))
+                return jsonify(user)
             else:
-                return jsonify(error_response('User not found')), 404
+                return jsonify('User not found'), 404
         else:
             # Fallback to in-memory
             user = users_db.get(user_id)
             if user:
-                return jsonify(success_response(user))
+                return jsonify(user)
             else:
-                return jsonify(error_response('User not found')), 404
+                return jsonify('User not found'), 404
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to get user details: {str(e)}')), 500
+        return jsonify(f'Failed to get user details: {str(e)}'), 500
 
 @admin_bp.route('/users/<user_id>/status', methods=['PUT'])
 @token_required
@@ -254,7 +252,7 @@ def update_user_status(user_id):
         reason = data.get('reason', '')
         
         if new_status not in ['active', 'inactive', 'suspended']:
-            return jsonify(error_response('Invalid status. Must be: active, inactive, or suspended')), 400
+            return jsonify('Invalid status. Must be: active, inactive, or suspended'), 400
         
         admin_id = request.current_user.get('user_id')
         db_manager = get_db_manager()
@@ -279,31 +277,31 @@ def update_user_status(user_id):
                     'reason': reason
                 })
                 
-                return jsonify(success_response({
+                return jsonify({
                     'message': f'User status updated to {new_status}',
                     'user_id': user_id,
                     'new_status': new_status,
                     'updated_by': admin_id,
                     'reason': reason
-                }))
+                })
             else:
-                return jsonify(error_response('User not found or update failed')), 404
+                return jsonify('User not found or update failed'), 404
         else:
             # Fallback to in-memory
             if user_id in users_db:
                 users_db[user_id]['status'] = new_status
                 users_db[user_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
                 
-                return jsonify(success_response({
+                return jsonify({
                     'message': f'User status updated to {new_status}',
                     'user_id': user_id,
                     'new_status': new_status
-                }))
+                })
             else:
-                return jsonify(error_response('User not found')), 404
+                return jsonify('User not found'), 404
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to update user status: {str(e)}')), 500
+        return jsonify(f'Failed to update user status: {str(e)}'), 500
 
 @admin_bp.route('/users/<user_id>/role', methods=['PUT'])
 @token_required
@@ -316,7 +314,7 @@ def update_user_role(user_id):
         
         valid_roles = ['customer', 'wholesale_reseller', 'admin']
         if new_role not in valid_roles:
-            return jsonify(error_response(f'Invalid role. Must be one of: {", ".join(valid_roles)}')), 400
+            return jsonify(f'Invalid role. Must be one of: {", ".join(valid_roles)}'), 400
         
         admin_id = request.current_user.get('user_id')
         db_manager = get_db_manager()
@@ -340,30 +338,30 @@ def update_user_role(user_id):
                     'new_role': new_role
                 })
                 
-                return jsonify(success_response({
+                return jsonify({
                     'message': f'User role updated to {new_role}',
                     'user_id': user_id,
                     'new_role': new_role,
                     'updated_by': admin_id
-                }))
+                })
             else:
-                return jsonify(error_response('User not found or update failed')), 404
+                return jsonify('User not found or update failed'), 404
         else:
             # Fallback to in-memory
             if user_id in users_db:
                 users_db[user_id]['role'] = new_role
                 users_db[user_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
                 
-                return jsonify(success_response({
+                return jsonify({
                     'message': f'User role updated to {new_role}',
                     'user_id': user_id,
                     'new_role': new_role
-                }))
+                })
             else:
-                return jsonify(error_response('User not found')), 404
+                return jsonify('User not found'), 404
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to update user role: {str(e)}')), 500
+        return jsonify(f'Failed to update user role: {str(e)}'), 500
 
 @admin_bp.route('/users', methods=['POST'])
 @token_required
@@ -377,7 +375,7 @@ def create_user():
         required_fields = ['email', 'password', 'role']
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
-            return jsonify(error_response(f"Missing fields: {', '.join(missing_fields)}")), 400
+            return jsonify(f"Missing fields: {', '.join(missing_fields)}"), 400
         
         email = data.get('email').lower().strip()
         password = data.get('password')
@@ -386,7 +384,7 @@ def create_user():
         # Validate role
         valid_roles = ['customer', 'wholesale_reseller', 'admin']
         if role not in valid_roles:
-            return jsonify(error_response(f'Invalid role. Must be one of: {", ".join(valid_roles)}')), 400
+            return jsonify(f'Invalid role. Must be one of: {", ".join(valid_roles)}'), 400
         
         db_manager = get_db_manager()
         admin_id = request.current_user.get('user_id')
@@ -400,7 +398,7 @@ def create_user():
             )
             
             if existing_user['success'] and existing_user['data']:
-                return jsonify(error_response('User already exists with this email')), 409
+                return jsonify('User already exists with this email'), 409
             
             # Create new user
             user_data = {
@@ -422,7 +420,7 @@ def create_user():
                     'new_user_role': role
                 })
                 
-                return jsonify(success_response({
+                return jsonify({
                     'message': 'User created successfully',
                     'user': {
                         'id': result['inserted_id'],
@@ -431,14 +429,14 @@ def create_user():
                         'status': 'active',
                         'created_by': admin_id
                     }
-                })), 201
+                }), 201
             else:
-                return jsonify(error_response(f'Failed to create user: {result.get("error")}')), 500
+                return jsonify(f'Failed to create user: {result.get("error")}'), 500
         else:
-            return jsonify(error_response('Database not available for user creation')), 503
+            return jsonify('Database not available for user creation'), 503
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to create user: {str(e)}')), 500
+        return jsonify(f'Failed to create user: {str(e)}'), 500
 
 @admin_bp.route('/users/<user_id>', methods=['DELETE'])
 @token_required
@@ -450,7 +448,7 @@ def delete_user(user_id):
         
         # Prevent self-deletion
         if user_id == admin_id:
-            return jsonify(error_response('Cannot delete your own account')), 400
+            return jsonify('Cannot delete your own account'), 400
         
         db_manager = get_db_manager()
         
@@ -463,7 +461,7 @@ def delete_user(user_id):
             )
             
             if not user_result['success'] or not user_result['data']:
-                return jsonify(error_response('User not found')), 404
+                return jsonify('User not found'), 404
             
             user_info = user_result['data']
             
@@ -486,18 +484,18 @@ def delete_user(user_id):
                     'deleted_user_role': user_info['role']
                 })
                 
-                return jsonify(success_response({
+                return jsonify({
                     'message': f'User {user_info["email"]} deleted successfully',
                     'deleted_user_id': user_id,
                     'deleted_by': admin_id
-                }))
+                })
             else:
-                return jsonify(error_response('Failed to delete user')), 500
+                return jsonify('Failed to delete user'), 500
         else:
-            return jsonify(error_response('Database not available for user deletion')), 503
+            return jsonify('Database not available for user deletion'), 503
 
     except Exception as e:
-        return jsonify(error_response(f'Failed to delete user: {str(e)}')), 500
+        return jsonify(f'Failed to delete user: {str(e)}'), 500
 
 @admin_bp.route('/system-info')
 @token_required
@@ -524,10 +522,10 @@ def get_system_info():
             'payment_service': service_checker.check_payment_service()
         }
         
-        return jsonify(success_response(system_info))
+        return jsonify(system_info)
         
     except Exception as e:
-        return jsonify(error_response(f'Failed to get system info: {str(e)}')), 500
+        return jsonify(f'Failed to get system info: {str(e)}'), 500
 
 @admin_bp.route('/security/events', methods=['GET'])
 @token_required
@@ -557,14 +555,14 @@ def get_security_events():
             }
         ]
         
-        return jsonify(success_response({
+        return jsonify({
             'security_events': security_events,
             'total_events': len(security_events),
             'last_updated': datetime.now(timezone.utc).isoformat() + 'Z'
-        }))
+        })
         
     except Exception as e:
-        return jsonify(error_response(f'Failed to get security events: {str(e)}')), 500
+        return jsonify(f'Failed to get security events: {str(e)}'), 500
 
 @admin_bp.route('/maintenance', methods=['POST'])
 @token_required
@@ -579,7 +577,7 @@ def trigger_maintenance():
         valid_tasks = ['clear_cache', 'cleanup_logs', 'backup_database', 'refresh_settings']
         
         if task not in valid_tasks:
-            return jsonify(error_response(f'Invalid task. Must be one of: {", ".join(valid_tasks)}')), 400
+            return jsonify(f'Invalid task. Must be one of: {", ".join(valid_tasks)}'), 400
         
         maintenance_result = {'task': task, 'status': 'completed', 'details': {}}
         
@@ -627,7 +625,7 @@ def trigger_maintenance():
             'result': maintenance_result
         })
         
-        return jsonify(success_response(maintenance_result))
+        return jsonify(maintenance_result)
         
     except Exception as e:
-        return jsonify(error_response(f'Maintenance task failed: {str(e)}')), 500
+        return jsonify(f'Maintenance task failed: {str(e)}'), 500

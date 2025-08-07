@@ -5,7 +5,7 @@ Database-driven pricing control, product management, and system settings
 
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone
-from utils.auth_decorators import token_required, role_required
+from auth.user_auth import token_required, role_required
 from utils.database import get_db_manager, execute_query
 
 # Initialize blueprint

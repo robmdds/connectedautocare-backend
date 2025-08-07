@@ -7,7 +7,6 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone
 import uuid
 import json
-from utils.auth_decorators import token_required
 from utils.database import get_db_manager, execute_query
 from utils.service_availability import ServiceChecker
 
@@ -16,7 +15,7 @@ customer_bp = Blueprint('customer', __name__)
 
 # Import customer services with error handling
 try:
-    from auth.user_auth import UserAuth, SecurityUtils
+    from auth.user_auth import UserAuth, SecurityUtils, token_required
     from models.database_models import UserModel, CustomerModel, DatabaseUtils
     customer_services_available = True
     

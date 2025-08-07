@@ -1,184 +1,151 @@
 """
 User Authentication Endpoints
-User registration, login, profile management
+User registration, login, profile management - Updated with Database Integration
 """
 
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone
 import uuid
-from utils.auth_decorators import token_required, role_required
-from utils.service_availability import ServiceChecker
+from utils.database import get_db_manager, execute_query
+from utils.response_helpers import success_response, error_response
 
 # Initialize blueprint
 user_auth_bp = Blueprint('user_auth', __name__)
 
-# Import user management services with error handling
+# Import updated authentication system
 try:
     from auth.user_auth import UserAuth, SessionManager, SecurityUtils
-    from models.database_models import UserModel, CustomerModel, ResellerModel
     user_management_available = True
-    
-    # Initialize user management components
-    user_model = UserModel()
-    customer_model = CustomerModel()
-    reseller_model = ResellerModel()
-    
-    # Initialize in-memory databases (in production, this would be persistent storage)
-    users_db = {}
-    customers_db = {}
-    resellers_db = {}
-    sessions_db = {}
-    
-    def initialize_sample_data():
-        """Initialize sample data for testing"""
-        global users_db, customers_db, resellers_db
-
-        # Create admin user
-        admin_id = str(uuid.uuid4())
-        admin_user = user_model.create_user({
-            'id': admin_id,
-            'email': 'admin@connectedautocare.com',
-            'password_hash': UserAuth.hash_password('Admin123!'),
-            'role': 'admin',
-            'profile': {
-                'first_name': 'System',
-                'last_name': 'Administrator',
-                'company': 'ConnectedAutoCare'
-            }
-        })
-        users_db[admin_id] = admin_user
-
-        # Create sample wholesale reseller
-        reseller_user_id = str(uuid.uuid4())
-        reseller_user = user_model.create_user({
-            'id': reseller_user_id,
-            'email': 'reseller@example.com',
-            'password_hash': UserAuth.hash_password('Reseller123!'),
-            'role': 'wholesale_reseller',
-            'profile': {
-                'first_name': 'John',
-                'last_name': 'Smith',
-                'company': 'ABC Insurance Agency'
-            }
-        })
-        users_db[reseller_user_id] = reseller_user
-
-        # Create reseller profile
-        reseller_id = str(uuid.uuid4())
-        reseller_profile = reseller_model.create_reseller({
-            'id': reseller_id,
-            'user_id': reseller_user_id,
-            'business_name': 'ABC Insurance Agency',
-            'license_number': 'INS-12345',
-            'license_state': 'CA',
-            'business_type': 'insurance_agency',
-            'phone': '555-123-4567',
-            'email': 'reseller@example.com'
-        })
-        resellers_db[reseller_id] = reseller_profile
-
-        # Create sample customer
-        customer_user_id = str(uuid.uuid4())
-        customer_user = user_model.create_user({
-            'id': customer_user_id,
-            'email': 'customer@example.com',
-            'password_hash': UserAuth.hash_password('Customer123!'),
-            'role': 'customer',
-            'profile': {
-                'first_name': 'Jane',
-                'last_name': 'Doe'
-            }
-        })
-        users_db[customer_user_id] = customer_user
-
-        # Create customer profile
-        customer_id = str(uuid.uuid4())
-        customer_profile = customer_model.create_customer({
-            'id': customer_id,
-            'user_id': customer_user_id,
-            'first_name': 'Jane',
-            'last_name': 'Doe',
-            'email': 'customer@example.com',
-            'phone': '555-987-6543'
-        })
-        customers_db[customer_id] = customer_profile
-
-    # Initialize sample data
-    try:
-        initialize_sample_data()
-    except Exception as e:
-        print(f"Warning: Could not initialize sample data: {e}")
-
 except ImportError as e:
     print(f"Warning: User management not available: {e}")
     user_management_available = False
     
-    # Create fallback classes
+    # Create fallback classes (same as your existing code)
     class UserAuth:
         ROLES = ['admin', 'wholesale_reseller', 'customer']
 
         @staticmethod
         def hash_password(password):
-            return "dummy_hash"
+            import bcrypt
+            return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
         @staticmethod
         def verify_password(password, hash):
-            return False
+            import bcrypt
+            return bcrypt.checkpw(password.encode('utf-8'), hash.encode('utf-8'))
 
         @staticmethod
         def validate_email(email):
-            return "@" in email
+            import re
+            pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            return re.match(pattern, email) is not None
 
         @staticmethod
         def validate_password(password):
+            if len(password) < 8:
+                return False, "Password must be at least 8 characters long"
             return True, "Valid"
 
         @staticmethod
         def generate_token(data):
-            return "dummy_token"
+            import jwt
+            from flask import current_app
+            payload = {
+                'user_id': data['id'],
+                'email': data['email'],
+                'role': data['role'],
+                'exp': datetime.utcnow() + datetime.timedelta(hours=24),
+                'iat': datetime.utcnow()
+            }
+            return jwt.encode(payload, current_app.config.get('SECRET_KEY', 'default-secret'), algorithm='HS256')
 
     class SessionManager:
         @staticmethod
         def create_session(user_id, token):
-            return {"user_id": user_id, "token": token}
+            return {
+                "user_id": user_id, 
+                "token": token,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
 
     class SecurityUtils:
         @staticmethod
         def log_security_event(user_id, event, data):
-            pass
+            log_entry = {
+                'user_id': user_id,
+                'event_type': event,
+                'details': data,
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'ip_address': request.remote_addr if request else 'unknown'
+            }
+            print(f"Security Event: {log_entry}")
 
-    class UserModel:
-        def create_user(self, data):
-            return data
+# Token verification decorator
+def token_required(f):
+    """Decorator to require valid JWT token"""
+    from functools import wraps
+    import jwt
+    from flask import current_app
+    
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        
+        # Check for token in Authorization header
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            try:
+                token = auth_header.split(" ")[1]  # Bearer <token>
+            except IndexError:
+                return jsonify({'error': 'Invalid token format'}), 401
+        
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+        
+        try:
+            # Verify token
+            payload = jwt.decode(token, current_app.config.get('SECRET_KEY', 'default-secret'), algorithms=['HS256'])
+            request.current_user = payload
+            return f(*args, **kwargs)
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token'}), 401
+    
+    return decorated
 
-        def update_login(self, user_id):
-            return {"last_login": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}
-
-    class CustomerModel:
-        def create_customer(self, data):
-            return data
-
-    class ResellerModel:
-        def create_reseller(self, data):
-            return data
-
-    # Initialize dummy objects
-    user_model = UserModel()
-    customer_model = CustomerModel()
-    reseller_model = ResellerModel()
-    users_db = {}
-    customers_db = {}
-    resellers_db = {}
-    sessions_db = {}
+def role_required(required_role):
+    """Decorator to require specific role or higher"""
+    from functools import wraps
+    
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not hasattr(request, 'current_user'):
+                return jsonify({'error': 'Authentication required'}), 401
+            
+            user_role = request.current_user.get('role')
+            
+            # Role hierarchy
+            role_levels = {
+                'customer': 10,
+                'wholesale_reseller': 50,
+                'admin': 100
+            }
+            
+            user_level = role_levels.get(user_role, 0)
+            required_level = role_levels.get(required_role, 0)
+            
+            if user_level < required_level:
+                return jsonify({'error': 'Insufficient permissions'}), 403
+            
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
 
 @user_auth_bp.route('/register', methods=['POST'])
 def register():
-    """Register new user"""
-    service_checker = ServiceChecker()
-    
-    if not service_checker.user_management_available:
-        return jsonify({'error': 'User management not available'}), 503
-
+    """Register new user with database integration"""
     try:
         data = request.get_json()
 
@@ -186,7 +153,7 @@ def register():
         required_fields = ['email', 'password', 'role']
         for field in required_fields:
             if not data.get(field):
-                return jsonify({'error': f'{field} is required'}), 400
+                return jsonify(error_response(f'{field} is required')), 400
 
         email = data.get('email').lower().strip()
         password = data.get('password')
@@ -194,65 +161,91 @@ def register():
 
         # Validate email format
         if not UserAuth.validate_email(email):
-            return jsonify({'error': 'Invalid email format'}), 400
+            return jsonify(error_response('Invalid email format')), 400
 
         # Validate password strength
         valid_password, password_message = UserAuth.validate_password(password)
         if not valid_password:
-            return jsonify({'error': password_message}), 400
+            return jsonify(error_response(password_message)), 400
 
         # Validate role
-        if role not in UserAuth.ROLES:
-            return jsonify({'error': 'Invalid role'}), 400
+        if role not in ['customer', 'wholesale_reseller']:  # Admin created separately
+            return jsonify(error_response('Invalid role')), 400
 
-        # Check if user already exists
-        existing_user = next((u for u in users_db.values()
-                             if u.get('email') == email), None)
-        if existing_user:
-            return jsonify({'error': 'User already exists'}), 409
+        # Database operations
+        db_manager = get_db_manager()
+        
+        if db_manager.available:
+            # Check if user already exists
+            existing_user = execute_query(
+                'SELECT id FROM users WHERE email = %s',
+                (email,),
+                'one'
+            )
+            
+            if existing_user['success'] and existing_user['data']:
+                return jsonify(error_response('User already exists')), 409
 
-        # Create new user
-        user_id = str(uuid.uuid4())
-        password_hash = UserAuth.hash_password(password)
+            # Create new user in database
+            user_id = str(uuid.uuid4())
+            password_hash = UserAuth.hash_password(password)
 
-        user_data = {
-            'id': user_id,
-            'email': email,
-            'password_hash': password_hash,
-            'role': role,
-            'profile': data.get('profile', {})
-        }
-
-        new_user = user_model.create_user(user_data)
-        users_db[user_id] = new_user
-
-        # Create additional profiles based on role
-        if role == 'wholesale_reseller':
-            reseller_id = str(uuid.uuid4())
-            reseller_data = {
-                'id': reseller_id,
-                'user_id': user_id,
-                'business_name': data.get('business_name', ''),
-                'license_number': data.get('license_number', ''),
-                'license_state': data.get('license_state', ''),
-                'phone': data.get('phone', ''),
-                'email': email
-            }
-            reseller_profile = reseller_model.create_reseller(reseller_data)
-            resellers_db[reseller_id] = reseller_profile
-
-        elif role == 'customer':
-            customer_id = str(uuid.uuid4())
-            customer_data = {
-                'id': customer_id,
-                'user_id': user_id,
-                'first_name': data.get('first_name', ''),
-                'last_name': data.get('last_name', ''),
+            user_data = {
+                'id': user_id,
                 'email': email,
-                'phone': data.get('phone', '')
+                'password_hash': password_hash,
+                'role': role,
+                'status': 'active',
+                'profile': data.get('profile', {}),
+                'created_at': datetime.now(timezone.utc),
+                'updated_at': datetime.now(timezone.utc)
             }
-            customer_profile = customer_model.create_customer(customer_data)
-            customers_db[customer_id] = customer_profile
+
+            user_result = db_manager.insert_record('users', user_data)
+            
+            if not user_result['success']:
+                return jsonify(error_response('Failed to create user')), 500
+
+            # Create role-specific profiles
+            if role == 'wholesale_reseller':
+                reseller_data = {
+                    'id': str(uuid.uuid4()),
+                    'user_id': user_id,
+                    'business_name': data.get('business_name', ''),
+                    'license_number': data.get('license_number', ''),
+                    'license_state': data.get('license_state', ''),
+                    'business_type': data.get('business_type', 'insurance_agency'),
+                    'contact_info': {
+                        'phone': data.get('phone', ''),
+                        'email': email
+                    },
+                    'status': 'pending',
+                    'created_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+                db_manager.insert_record('resellers', reseller_data)
+
+            elif role == 'customer':
+                customer_data = {
+                    'id': str(uuid.uuid4()),
+                    'user_id': user_id,
+                    'customer_type': 'individual',
+                    'personal_info': {
+                        'first_name': data.get('first_name', ''),
+                        'last_name': data.get('last_name', '')
+                    },
+                    'contact_info': {
+                        'email': email,
+                        'phone': data.get('phone', '')
+                    },
+                    'status': 'active',
+                    'created_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+                db_manager.insert_record('customers', customer_data)
+
+        else:
+            return jsonify(error_response('Database not available')), 503
 
         # Generate token
         token = UserAuth.generate_token({
@@ -261,36 +254,26 @@ def register():
             'role': role
         })
 
-        # Create session
-        session_data = SessionManager.create_session(user_id, token)
-        sessions_db[user_id] = session_data
-
         # Log security event
-        SecurityUtils.log_security_event(
-            user_id, 'user_registered', {'role': role})
+        SecurityUtils.log_security_event(user_id, 'user_registered', {'role': role})
 
-        return jsonify({
+        return jsonify(success_response({
             'message': 'User registered successfully',
             'user': {
                 'id': user_id,
                 'email': email,
                 'role': role,
-                'profile': new_user.get('profile', {})
+                'profile': data.get('profile', {})
             },
             'token': token
-        }), 201
+        })), 201
 
     except Exception as e:
-        return jsonify({'error': f'Registration failed: {str(e)}'}), 500
+        return jsonify(error_response(f'Registration failed: {str(e)}')), 500
 
 @user_auth_bp.route('/login', methods=['POST'])
 def login():
-    """User login"""
-    service_checker = ServiceChecker()
-    
-    if not service_checker.user_management_available:
-        return jsonify({'error': 'User management not available'}), 503
-
+    """User login with database validation"""
     try:
         data = request.get_json()
 
@@ -298,63 +281,76 @@ def login():
         password = data.get('password', '')
 
         if not email or not password:
-            return jsonify({'error': 'Email and password are required'}), 400
+            return jsonify(error_response('Email and password are required')), 400
+
+        # Database authentication
+        db_manager = get_db_manager()
+        
+        if not db_manager.available:
+            return jsonify(error_response('Database not available')), 503
 
         # Find user by email
-        user = next((u for u in users_db.values()
-                    if u.get('email') == email), None)
-        if not user:
-            SecurityUtils.log_security_event(
-                None, 'login_failed', {'email': email, 'reason': 'user_not_found'})
-            return jsonify({'error': 'Invalid credentials'}), 401
+        user_result = execute_query('''
+            SELECT id, email, password_hash, role, status, profile, 
+                   last_login, login_count
+            FROM users 
+            WHERE email = %s AND status = 'active'
+        ''', (email,), 'one')
+
+        if not user_result['success'] or not user_result['data']:
+            SecurityUtils.log_security_event(None, 'login_failed', {
+                'email': email, 
+                'reason': 'user_not_found'
+            })
+            return jsonify(error_response('Invalid credentials')), 401
+
+        user = user_result['data']
 
         # Verify password
-        if not UserAuth.verify_password(password, user.get('password_hash')):
-            SecurityUtils.log_security_event(user.get('id'), 'login_failed', {
-                                             'reason': 'invalid_password'})
-            return jsonify({'error': 'Invalid credentials'}), 401
+        if not UserAuth.verify_password(password, user['password_hash']):
+            SecurityUtils.log_security_event(user['id'], 'login_failed', {
+                'reason': 'invalid_password'
+            })
+            return jsonify(error_response('Invalid credentials')), 401
 
-        # Check user status
-        if user.get('status') != 'active':
-            return jsonify({'error': 'Account is not active'}), 403
-
-        # Update login information
-        user_id = user.get('id')
-        login_update = user_model.update_login(user_id)
-        users_db[user_id].update({
-            'last_login': login_update['last_login'],
-            'updated_at': login_update['updated_at']
-        })
+        # Update login statistics
+        db_manager.update_record(
+            'users',
+            {
+                'last_login': datetime.now(timezone.utc),
+                'login_count': user.get('login_count', 0) + 1,
+                'updated_at': datetime.now(timezone.utc)
+            },
+            'id = %s',
+            (user['id'],)
+        )
 
         # Generate token
         token = UserAuth.generate_token({
-            'id': user_id,
-            'email': email,
-            'role': user.get('role')
+            'id': str(user['id']),
+            'email': user['email'],
+            'role': user['role']
         })
-
-        # Create/update session
-        session_data = SessionManager.create_session(user_id, token)
-        sessions_db[user_id] = session_data
 
         # Log successful login
-        SecurityUtils.log_security_event(user_id, 'login_success', {
-                                         'role': user.get('role')})
-
-        return jsonify({
-            'message': 'Login successful',
-            'user': {
-                'id': user_id,
-                'email': email,
-                'role': user.get('role'),
-                'profile': user.get('profile', {}),
-                'last_login': user.get('last_login')
-            },
-            'token': token
+        SecurityUtils.log_security_event(user['id'], 'login_success', {
+            'role': user['role']
         })
 
+        return jsonify(success_response({
+            'message': 'Login successful',
+            'user': {
+                'id': str(user['id']),
+                'email': user['email'],
+                'role': user['role'],
+                'profile': user.get('profile', {}),
+                'last_login': user['last_login'].isoformat() if user['last_login'] else None
+            },
+            'token': token
+        }))
+
     except Exception as e:
-        return jsonify({'error': f'Login failed: {str(e)}'}), 500
+        return jsonify(error_response(f'Login failed: {str(e)}')), 500
 
 @user_auth_bp.route('/logout', methods=['POST'])
 @token_required
@@ -362,269 +358,199 @@ def logout():
     """User logout"""
     try:
         user_id = request.current_user.get('user_id')
-
-        # Remove session
-        if user_id in sessions_db:
-            del sessions_db[user_id]
-
-        # Log logout
         SecurityUtils.log_security_event(user_id, 'logout', {})
-
-        return jsonify({'message': 'Logout successful'})
-
+        return jsonify(success_response({'message': 'Logout successful'}))
     except Exception as e:
-        return jsonify({'error': f'Logout failed: {str(e)}'}), 500
+        return jsonify(error_response(f'Logout failed: {str(e)}')), 500
 
 @user_auth_bp.route('/profile', methods=['GET'])
 @token_required
 def get_profile():
-    """Get user profile"""
+    """Get user profile from database"""
     try:
         user_id = request.current_user.get('user_id')
-        user = users_db.get(user_id)
+        
+        # Get user with role-specific data
+        user_result = execute_query('''
+            SELECT u.id, u.email, u.role, u.status, u.profile, 
+                   u.created_at, u.updated_at, u.last_login, u.login_count,
+                   c.id as customer_id, c.customer_type, c.personal_info, c.contact_info as customer_contact,
+                   r.id as reseller_id, r.business_name, r.license_number, r.tier, r.status as reseller_status
+            FROM users u
+            LEFT JOIN customers c ON u.id = c.user_id
+            LEFT JOIN resellers r ON u.id = r.user_id
+            WHERE u.id = %s
+        ''', (user_id,), 'one')
 
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        if not user_result['success'] or not user_result['data']:
+            return jsonify(error_response('User not found')), 404
 
-        # Get additional profile data based on role
-        additional_data = {}
-        role = user.get('role')
-
-        if role == 'wholesale_reseller':
-            reseller = next((r for r in resellers_db.values()
-                            if r.get('user_id') == user_id), None)
-            if reseller:
-                additional_data['reseller_profile'] = reseller
-
-        elif role == 'customer':
-            customer = next((c for c in customers_db.values()
-                            if c.get('user_id') == user_id), None)
-            if customer:
-                additional_data['customer_profile'] = customer
-
-        print(f"User profile accessed: {user_id} ({role})")
-        return jsonify({
+        user = user_result['data']
+        
+        profile_data = {
             'user': {
-                'id': user_id,
-                'email': user.get('email'),
-                'role': role,
+                'id': str(user['id']),
+                'email': user['email'],
+                'role': user['role'],
+                'status': user['status'],
                 'profile': user.get('profile', {}),
-                'status': user.get('status'),
-                'created_at': user.get('created_at'),
-                'last_login': user.get('last_login')
-            },
-            **additional_data
-        })
+                'created_at': user['created_at'].isoformat() if user['created_at'] else None,
+                'last_login': user['last_login'].isoformat() if user['last_login'] else None,
+                'login_count': user.get('login_count', 0)
+            }
+        }
+
+        # Add role-specific data
+        if user.get('customer_id'):
+            profile_data['customer_profile'] = {
+                'id': str(user['customer_id']),
+                'customer_type': user['customer_type'],
+                'personal_info': user.get('personal_info', {}),
+                'contact_info': user.get('customer_contact', {})
+            }
+
+        if user.get('reseller_id'):
+            profile_data['reseller_profile'] = {
+                'id': str(user['reseller_id']),
+                'business_name': user['business_name'],
+                'license_number': user['license_number'],
+                'tier': user['tier'],
+                'status': user['reseller_status']
+            }
+
+        return jsonify(success_response(profile_data))
 
     except Exception as e:
-        return jsonify({'error': f'Failed to get profile: {str(e)}'}), 500
+        return jsonify(error_response(f'Failed to get profile: {str(e)}')), 500
 
 @user_auth_bp.route('/profile', methods=['PUT'])
 @token_required
 def update_profile():
-    """Update user profile"""
+    """Update user profile in database"""
     try:
         user_id = request.current_user.get('user_id')
-        user = users_db.get(user_id)
-
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'Profile data is required'}), 400
-
-        # Update basic profile information
-        profile_updates = {}
-        allowed_fields = ['first_name', 'last_name', 'phone', 'company', 'address']
         
-        for field in allowed_fields:
-            if field in data:
-                profile_updates[field] = data[field]
+        if not data:
+            return jsonify(error_response('Profile data is required')), 400
 
-        if profile_updates:
-            # Update user profile
-            if 'profile' not in users_db[user_id]:
-                users_db[user_id]['profile'] = {}
-            users_db[user_id]['profile'].update(profile_updates)
-            users_db[user_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
+        db_manager = get_db_manager()
+        if not db_manager.available:
+            return jsonify(error_response('Database not available')), 503
+
+        # Update user profile
+        if 'profile' in data:
+            db_manager.update_record(
+                'users',
+                {
+                    'profile': data['profile'],
+                    'updated_at': datetime.now(timezone.utc)
+                },
+                'id = %s',
+                (user_id,)
+            )
 
         # Update role-specific profiles
-        role = user.get('role')
+        user_role = request.current_user.get('role')
         
-        if role == 'wholesale_reseller':
-            reseller = next((r for r in resellers_db.values()
-                            if r.get('user_id') == user_id), None)
-            if reseller:
-                reseller_updates = {}
-                reseller_fields = ['business_name', 'license_number', 'license_state', 'business_type']
-                
-                for field in reseller_fields:
-                    if field in data:
-                        reseller_updates[field] = data[field]
-                
-                if reseller_updates:
-                    reseller_id = reseller['id']
-                    resellers_db[reseller_id].update(reseller_updates)
-                    resellers_db[reseller_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
+        if user_role == 'customer' and 'customer_profile' in data:
+            customer_data = data['customer_profile']
+            db_manager.update_record(
+                'customers',
+                {
+                    'personal_info': customer_data.get('personal_info', {}),
+                    'contact_info': customer_data.get('contact_info', {}),
+                    'updated_at': datetime.now(timezone.utc)
+                },
+                'user_id = %s',
+                (user_id,)
+            )
 
-        elif role == 'customer':
-            customer = next((c for c in customers_db.values()
-                            if c.get('user_id') == user_id), None)
-            if customer:
-                customer_updates = {}
-                customer_fields = ['first_name', 'last_name', 'phone']
-                
-                for field in customer_fields:
-                    if field in data:
-                        customer_updates[field] = data[field]
-                
-                if customer_updates:
-                    customer_id = customer['id']
-                    customers_db[customer_id].update(customer_updates)
-                    customers_db[customer_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
+        elif user_role == 'wholesale_reseller' and 'reseller_profile' in data:
+            reseller_data = data['reseller_profile']
+            db_manager.update_record(
+                'resellers',
+                {
+                    'business_name': reseller_data.get('business_name'),
+                    'license_number': reseller_data.get('license_number'),
+                    'license_state': reseller_data.get('license_state'),
+                    'updated_at': datetime.now(timezone.utc)
+                },
+                'user_id = %s',
+                (user_id,)
+            )
 
-        # Log profile update
         SecurityUtils.log_security_event(user_id, 'profile_updated', {
-            'fields_updated': list(profile_updates.keys())
+            'fields_updated': list(data.keys())
         })
 
-        return jsonify({
+        return jsonify(success_response({
             'message': 'Profile updated successfully',
-            'updated_fields': list(profile_updates.keys())
-        })
+            'updated_fields': list(data.keys())
+        }))
 
     except Exception as e:
-        return jsonify({'error': f'Failed to update profile: {str(e)}'}), 500
+        return jsonify(error_response(f'Failed to update profile: {str(e)}')), 500
 
 @user_auth_bp.route('/change-password', methods=['PUT'])
 @token_required
 def change_password():
-    """Change user password"""
+    """Change user password in database"""
     try:
         user_id = request.current_user.get('user_id')
-        user = users_db.get(user_id)
-
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-
         data = request.get_json()
+        
         if not data:
-            return jsonify({'error': 'Password data is required'}), 400
+            return jsonify(error_response('Password data is required')), 400
 
         current_password = data.get('current_password')
         new_password = data.get('new_password')
 
         if not current_password or not new_password:
-            return jsonify({'error': 'Current password and new password are required'}), 400
+            return jsonify(error_response('Current and new password required')), 400
+
+        # Get current password hash from database
+        user_result = execute_query(
+            'SELECT password_hash FROM users WHERE id = %s',
+            (user_id,),
+            'one'
+        )
+
+        if not user_result['success'] or not user_result['data']:
+            return jsonify(error_response('User not found')), 404
 
         # Verify current password
-        if not UserAuth.verify_password(current_password, user.get('password_hash')):
+        if not UserAuth.verify_password(current_password, user_result['data']['password_hash']):
             SecurityUtils.log_security_event(user_id, 'password_change_failed', {
                 'reason': 'invalid_current_password'
             })
-            return jsonify({'error': 'Current password is incorrect'}), 401
+            return jsonify(error_response('Current password is incorrect')), 401
 
         # Validate new password
         valid_password, password_message = UserAuth.validate_password(new_password)
         if not valid_password:
-            return jsonify({'error': password_message}), 400
+            return jsonify(error_response(password_message)), 400
 
-        # Update password
-        new_password_hash = UserAuth.hash_password(new_password)
-        users_db[user_id]['password_hash'] = new_password_hash
-        users_db[user_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
+        # Update password in database
+        db_manager = get_db_manager()
+        if not db_manager.available:
+            return jsonify(error_response('Database not available')), 503
 
-        # Log password change
+        db_manager.update_record(
+            'users',
+            {
+                'password_hash': UserAuth.hash_password(new_password),
+                'updated_at': datetime.now(timezone.utc)
+            },
+            'id = %s',
+            (user_id,)
+        )
+
         SecurityUtils.log_security_event(user_id, 'password_changed', {})
-
-        return jsonify({
-            'message': 'Password changed successfully'
-        })
+        return jsonify(success_response({'message': 'Password changed successfully'}))
 
     except Exception as e:
-        return jsonify({'error': f'Failed to change password: {str(e)}'}), 500
-
-@user_auth_bp.route('/forgot-password', methods=['POST'])
-def forgot_password():
-    """Initiate password reset process"""
-    try:
-        data = request.get_json()
-        if not data or not data.get('email'):
-            return jsonify({'error': 'Email is required'}), 400
-
-        email = data.get('email').lower().strip()
-
-        # Find user by email
-        user = next((u for u in users_db.values()
-                    if u.get('email') == email), None)
-        
-        # Always return success to prevent email enumeration
-        if user:
-            # In production, send reset email here
-            SecurityUtils.log_security_event(user.get('id'), 'password_reset_requested', {
-                'email': email
-            })
-            
-            # Generate reset token (in production, store this securely)
-            reset_token = str(uuid.uuid4())
-            
-            # Store reset token with expiration (in production, use database)
-            # For now, just log it for testing
-            print(f"Password reset token for {email}: {reset_token}")
-
-        return jsonify({
-            'message': 'If an account exists with that email, a password reset link has been sent'
-        })
-
-    except Exception as e:
-        return jsonify({'error': f'Password reset request failed: {str(e)}'}), 500
-
-@user_auth_bp.route('/reset-password', methods=['POST'])
-def reset_password():
-    """Reset password with token"""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'Reset data is required'}), 400
-
-        reset_token = data.get('reset_token')
-        new_password = data.get('new_password')
-        email = data.get('email', '').lower().strip()
-
-        if not all([reset_token, new_password, email]):
-            return jsonify({'error': 'Reset token, new password, and email are required'}), 400
-
-        # Validate new password
-        valid_password, password_message = UserAuth.validate_password(new_password)
-        if not valid_password:
-            return jsonify({'error': password_message}), 400
-
-        # Find user by email
-        user = next((u for u in users_db.values()
-                    if u.get('email') == email), None)
-        
-        if not user:
-            return jsonify({'error': 'Invalid reset token'}), 400
-
-        # In production, verify reset token validity and expiration
-        # For now, accept any token for testing
-        
-        # Update password
-        new_password_hash = UserAuth.hash_password(new_password)
-        user_id = user.get('id')
-        users_db[user_id]['password_hash'] = new_password_hash
-        users_db[user_id]['updated_at'] = datetime.now(timezone.utc).isoformat()
-
-        # Log password reset
-        SecurityUtils.log_security_event(user_id, 'password_reset_completed', {})
-
-        return jsonify({
-            'message': 'Password reset successfully'
-        })
-
-    except Exception as e:
-        return jsonify({'error': f'Password reset failed: {str(e)}'}), 500
+        return jsonify(error_response(f'Failed to change password: {str(e)}')), 500
 
 @user_auth_bp.route('/verify-token', methods=['POST'])
 def verify_token():
@@ -639,86 +565,99 @@ def verify_token():
             if auth_header.startswith('Bearer '):
                 token = auth_header.split(' ')[1]
             else:
-                return jsonify({'error': 'Token is required'}), 400
+                return jsonify(error_response('Token is required')), 400
 
-        # In production, verify JWT token
-        # For now, just check if it's in our sessions
-        user_session = next((session for session in sessions_db.values()
-                            if session.get('token') == token), None)
+        # Verify JWT token
+        import jwt
+        from flask import current_app
         
-        if user_session:
-            user_id = user_session.get('user_id')
-            user = users_db.get(user_id)
+        try:
+            payload = jwt.decode(token, current_app.config.get('SECRET_KEY', 'default-secret'), algorithms=['HS256'])
             
-            if user and user.get('status') == 'active':
-                return jsonify({
+            # Check if user still exists and is active
+            user_result = execute_query(
+                'SELECT id, email, role, status FROM users WHERE id = %s AND status = %s',
+                (payload['user_id'], 'active'),
+                'one'
+            )
+            
+            if user_result['success'] and user_result['data']:
+                user = user_result['data']
+                return jsonify(success_response({
                     'valid': True,
                     'user': {
-                        'id': user_id,
-                        'email': user.get('email'),
-                        'role': user.get('role'),
-                        'profile': user.get('profile', {})
+                        'id': str(user['id']),
+                        'email': user['email'],
+                        'role': user['role']
                     }
-                })
-
-        return jsonify({'valid': False, 'error': 'Invalid or expired token'}), 401
+                }))
+            else:
+                return jsonify(error_response('User not found or inactive')), 401
+                
+        except jwt.ExpiredSignatureError:
+            return jsonify(error_response('Token has expired')), 401
+        except jwt.InvalidTokenError:
+            return jsonify(error_response('Invalid token')), 401
 
     except Exception as e:
-        return jsonify({'error': f'Token verification failed: {str(e)}'}), 500
+        return jsonify(error_response(f'Token verification failed: {str(e)}')), 500
 
+@user_auth_bp.route('/health')
+def auth_health():
+    """Authentication service health check"""
+    try:
+        db_manager = get_db_manager()
+        
+        return jsonify({
+            'service': 'User Authentication API',
+            'status': 'healthy',
+            'database_connected': db_manager.available,
+            'user_management_available': user_management_available,
+            'features': [
+                'User Registration/Login',
+                'Profile Management',
+                'Password Management', 
+                'Token Authentication',
+                'Database Integration'
+            ]
+        })
+    except Exception as e:
+        return jsonify({
+            'service': 'User Authentication API',
+            'status': 'degraded',
+            'error': str(e)
+        }), 500
+
+# Keep the admin-only endpoints for backward compatibility
 @user_auth_bp.route('/sessions', methods=['GET'])
 @token_required
 @role_required('admin')
 def get_active_sessions():
-    """Get active user sessions (admin only)"""
+    """Get active user sessions from database (admin only)"""
     try:
+        # Get recently logged in users (last 24 hours)
+        sessions_result = execute_query('''
+            SELECT id, email, role, last_login, login_count
+            FROM users 
+            WHERE last_login > %s
+            ORDER BY last_login DESC
+        ''', (datetime.now(timezone.utc) - datetime.timedelta(hours=24),))
+
         active_sessions = []
-        
-        for session in sessions_db.values():
-            user_id = session.get('user_id')
-            user = users_db.get(user_id)
-            
-            if user:
+        if sessions_result['success']:
+            for user in sessions_result['data']:
                 active_sessions.append({
-                    'user_id': user_id,
-                    'email': user.get('email'),
-                    'role': user.get('role'),
-                    'last_login': user.get('last_login'),
-                    'session_created': session.get('created_at', 'unknown')
+                    'user_id': str(user['id']),
+                    'email': user['email'],
+                    'role': user['role'],
+                    'last_login': user['last_login'].isoformat() if user['last_login'] else None,
+                    'login_count': user['login_count']
                 })
 
-        return jsonify({
+        return jsonify(success_response({
             'active_sessions': active_sessions,
             'total_sessions': len(active_sessions)
-        })
+        }))
 
     except Exception as e:
-        return jsonify({'error': f'Failed to get sessions: {str(e)}'}), 500
-
-@user_auth_bp.route('/sessions/<user_id>', methods=['DELETE'])
-@token_required
-@role_required('admin')
-def terminate_user_session(user_id):
-    """Terminate user session (admin only)"""
-    try:
-        if user_id in sessions_db:
-            user = users_db.get(user_id)
-            user_email = user.get('email', 'unknown') if user else 'unknown'
-            
-            del sessions_db[user_id]
-            
-            # Log session termination
-            admin_id = request.current_user.get('user_id')
-            SecurityUtils.log_security_event(admin_id, 'session_terminated', {
-                'target_user': user_id,
-                'target_email': user_email
-            })
-            
-            return jsonify({
-                'message': f'Session terminated for user {user_email}'
-            })
-        else:
-            return jsonify({'error': 'No active session found for user'}), 404
-
-    except Exception as e:
-        return jsonify({'error': f'Failed to terminate session: {str(e)}'}), 500
+        return jsonify(error_response(f'Failed to get sessions: {str(e)}')), 500

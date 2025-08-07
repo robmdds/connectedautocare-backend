@@ -5,15 +5,12 @@ Video upload, optimization, and management with Vercel Blob Storage
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone
 import json
-import time
 import uuid
 import os
 
 # Import utilities with proper error handling
 try:
-    from utils.response_helpers import success_response, error_response
-    from utils.auth_decorators import token_required, role_required
-    from utils.database import get_db_manager, execute_query
+    from utils.database import execute_query
     UTILS_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Some utilities not available: {e}")

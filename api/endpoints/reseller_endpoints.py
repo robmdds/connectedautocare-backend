@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone, timedelta
 import uuid
 import json
-from utils.auth_decorators import token_required, role_required
+from auth.user_auth import token_required, role_required, SecurityUtils, UserAuth
 from utils.database import get_db_manager, execute_query
 from utils.service_availability import ServiceChecker
 
@@ -12,7 +12,6 @@ reseller_bp = Blueprint('reseller', __name__)
 
 # Import reseller services with error handling
 try:
-    from auth.user_auth import UserAuth, SecurityUtils
     from models.database_models import UserModel, CustomerModel, ResellerModel, DatabaseUtils
     reseller_services_available = True
     

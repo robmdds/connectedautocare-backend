@@ -7,7 +7,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone, timedelta
 import json
 import time
-from utils.auth_decorators import token_required
+from auth.user_auth import token_required
 
 # Initialize blueprint
 payment_bp = Blueprint('payment', __name__)
