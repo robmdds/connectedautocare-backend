@@ -6,9 +6,13 @@ import json
 from auth.user_auth import token_required, role_required, SecurityUtils, UserAuth
 from utils.database import get_db_manager, execute_query
 from utils.service_availability import ServiceChecker
+import re
+import os
 
 # Initialize blueprint
 reseller_bp = Blueprint('reseller', __name__)
+
+FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', 'http://localhost:5173')
 
 # Import reseller services with error handling
 try:
@@ -935,123 +939,263 @@ def generate_quote_for_customer():
     try:
         data = request.get_json()
         user_id = request.current_user.get('user_id')
-        
+
         # Validate required fields
-        required_fields = ['customer_id', 'product_type']
+        required_fields = ['product_type', 'customer_info']
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify(f"Missing fields: {', '.join(missing_fields)}"), 400
-        
-        customer_id = data['customer_id']
+
+        customer_info = data['customer_info']
         product_type = data['product_type']
-        create_shareable = data.get('create_shareable', False)
-        
+        create_shareable = data.get('create_shareable', True)
+
+        # Validate customer info required fields
+        customer_required = ['first_name', 'last_name', 'email']
+        customer_missing = [field for field in customer_required if not customer_info.get(field)]
+        if customer_missing:
+            return jsonify(f"Missing customer fields: {', '.join(customer_missing)}"), 400
+
         db_manager = get_db_manager()
-        
+
         if db_manager.available:
-            # Verify customer belongs to this reseller
-            customer_result = execute_query('''
-                SELECT c.id, r.user_id, r.commission_rate
-                FROM customers c
-                JOIN resellers r ON c.assigned_reseller_id = r.user_id
-                WHERE c.id = %s AND r.user_id = %s
-            ''', (customer_id, user_id), 'one')
-            
-            if not customer_result['success'] or not customer_result['data']:
-                return jsonify('Customer not found or access denied'), 404
-            
-            customer_uuid, reseller_id, commission_rate = customer_result['data']
-            
+            # Get reseller info
+            reseller_result = execute_query(
+                'SELECT id, commission_rate, business_name, status FROM resellers WHERE user_id = %s',
+                (user_id,),
+                'one'
+            )
+
+            if not reseller_result['success']:
+                return jsonify(f"Database error during reseller lookup: {reseller_result.get('error', 'Unknown')}"), 500
+
+            if not reseller_result['data']:
+                return jsonify({
+                    'error': 'Reseller record not found',
+                    'user_id': str(user_id),
+                    'help': 'Please ensure your reseller account is properly set up'
+                }), 404
+
+            # Access RealDictRow fields by name
+            reseller_data = reseller_result['data']
+            reseller_id = reseller_data['id']
+            commission_rate = reseller_data['commission_rate']
+            business_name = reseller_data['business_name']
+            reseller_status = reseller_data['status']
+
+            # Check if reseller is active
+            if reseller_status != 'active':
+                return jsonify({
+                    'error': f'Reseller account is {reseller_status}',
+                    'help': 'Please contact support to activate your reseller account'
+                }), 403
+
+            assigned_reseller_id = user_id
+
+            # Process hero_product_type if it exists and clean coverage suffixes
+            hero_product_type = data.get('hero_product_type', product_type)
+            original_hero_product_type = hero_product_type
+            coverage_amount = None
+
+            # Use regex to clean hero_product_type and extract coverage amount
+            coverage_pattern = r'_(\d+)$'  # Matches _500, _1000, _1500, etc. at end of string
+            match = re.search(coverage_pattern, hero_product_type)
+
+            if match:
+                coverage_amount = int(match.group(1))  # Extract the number (500, 1000, etc.)
+                hero_product_type = re.sub(coverage_pattern, '', hero_product_type)  # Remove _XXX from end
+
+            # Check if customer exists by email
+            existing_customer = execute_query('''
+                                              SELECT id
+                                              FROM customers
+                                              WHERE contact_info ->>'email' = %s
+                                                AND assigned_reseller_id = %s
+                                              ''', (customer_info['email'].lower(), assigned_reseller_id), 'one')
+
+            customer_uuid = None
+
+            if existing_customer['success'] and existing_customer['data']:
+                # Customer exists, use existing ID
+                customer_uuid = existing_customer['data']['id']
+
+                # Update customer info
+                update_customer_result = execute_query('''
+                                                       UPDATE customers
+                                                       SET personal_info = %s,
+                                                           contact_info  = %s,
+                                                           business_info = %s,
+                                                           updated_at    = CURRENT_TIMESTAMP
+                                                       WHERE id = %s RETURNING id
+                                                       ''', (
+                                                           json.dumps({
+                                                               'first_name': customer_info['first_name'],
+                                                               'last_name': customer_info['last_name']
+                                                           }),
+                                                           json.dumps({
+                                                               'email': customer_info['email'].lower(),
+                                                               'phone': customer_info.get('phone', '')
+                                                           }),
+                                                           json.dumps({
+                                                               'company_name': customer_info.get('company', '')
+                                                           }),
+                                                           customer_uuid
+                                                       ), 'one')
+
+            else:
+                # Create new customer
+                customer_create_result = execute_query('''
+                                                       INSERT INTO customers (customer_type, personal_info,
+                                                                              contact_info, business_info,
+                                                                              assigned_reseller_id, created_at)
+                                                       VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id
+                                                       ''', (
+                                                           'individual' if not customer_info.get('company') else 'business',
+                                                           json.dumps({
+                                                               'first_name': customer_info['first_name'],
+                                                               'last_name': customer_info['last_name']
+                                                           }),
+                                                           json.dumps({
+                                                               'email': customer_info['email'].lower(),
+                                                               'phone': customer_info.get('phone', '')
+                                                           }),
+                                                           json.dumps({
+                                                               'company_name': customer_info.get('company', '')
+                                                           }),
+                                                           assigned_reseller_id
+                                                       ), 'one')
+
+                if customer_create_result['success']:
+                    customer_uuid = customer_create_result['data']['id']
+
+                    # Log customer creation
+                    SecurityUtils.log_security_event(user_id, 'customer_created_by_reseller', {
+                        'customer_id': str(customer_uuid),
+                        'customer_email': customer_info['email'],
+                        'reseller_user_id': assigned_reseller_id,
+                        'reseller_table_id': reseller_id
+                    })
+                else:
+                    return jsonify(f"Failed to create customer: {customer_create_result.get('error', 'Unknown error')}"), 500
+
             # Generate quote based on product type
             quote_result = None
-            
-            if product_type in ['hero', 'home_protection']:
+
+            if product_type in ['hero', 'home_protection', 'hero_level_protection_home', 'comprehensive_auto_protection',
+                                  'home_deductible_reimbursement', 'multi_vehicle_deductible_reimbursement',
+                                  'auto_advantage_deductible_reimbursement', 'all_vehicle_deductible_reimbursement',
+                                  'auto_rv_deductible_reimbursement']:
                 try:
                     from services.hero_rating_service import HeroRatingService
                     hero_service = HeroRatingService()
-                    
+
+                    # Use extracted coverage_amount if available, otherwise use provided coverage_limit
+                    coverage_limit = coverage_amount if coverage_amount else data.get('coverage_limit', 500)
+
                     quote_result = hero_service.generate_quote(
-                        product_type=data.get('hero_product_type', 'home_protection'),
+                        product_type=hero_product_type,  # Use cleaned hero_product_type
                         term_years=data.get('term_years', 1),
-                        coverage_limit=data.get('coverage_limit', 500),
+                        coverage_limit=coverage_limit,
                         customer_type='wholesale',
                         state=data.get('state', 'FL'),
                         zip_code=data.get('zip_code', '33101')
                     )
                 except ImportError:
                     return jsonify('Hero service not available'), 503
-            
+
             elif product_type in ['vsc', 'vehicle_service_contract']:
                 try:
                     from services.vsc_rating_service import VSCRatingService
                     vsc_service = VSCRatingService()
-                    
+
+                    # Use extracted coverage_amount for deductible if available
+                    deductible = coverage_amount if coverage_amount else data.get('deductible', 100)
+
                     quote_result = vsc_service.generate_quote(
                         make=data.get('make', ''),
                         year=data.get('year', 2020),
                         mileage=data.get('mileage', 50000),
                         coverage_level=data.get('coverage_level', 'gold'),
                         term_months=data.get('term_months', 36),
-                        deductible=data.get('deductible', 100),
+                        deductible=deductible,
                         customer_type='wholesale'
                     )
                 except ImportError:
                     return jsonify('VSC service not available'), 503
             else:
-                return jsonify(f'Unsupported product type: {product_type}'), 400
-            
+                return jsonify({
+                    'error': f'Unsupported product type: {product_type}',
+                    'supported_types': [
+                        'hero', 'home_protection', 'hero_level_protection_home',
+                        'vsc', 'vehicle_service_contract', 'comprehensive_auto_protection',
+                        'home_deductible_reimbursement', 'multi_vehicle_deductible_reimbursement',
+                        'auto_advantage_deductible_reimbursement', 'all_vehicle_deductible_reimbursement',
+                        'auto_rv_deductible_reimbursement'
+                    ],
+                    'note': 'Vehicle and auto products can have _500 or _1000 suffixes (e.g., all_vehicle_deductible_reimbursement_500)'
+                }), 400
+
             if not quote_result or not quote_result.get('success'):
                 return jsonify(quote_result.get('error', 'Quote generation failed')), 400
-            
+
             # Calculate commission
             total_price = quote_result.get('pricing_breakdown', {}).get('total_price', 0)
             commission_amount = total_price * float(commission_rate)
-            
+
             # Generate share token if requested
             share_token = None
+            share_url = None
             if create_shareable:
-                share_token = execute_query('SELECT generate_quote_share_token()', (), 'one')
-                if share_token['success']:
-                    share_token = share_token['data'][0]
-            
+                share_token = str(uuid.uuid4())
+                share_url = f"{FRONTEND_BASE_URL}/quote/shared/{share_token}"
+
             # Save quote to database
             quote_id = f"QTE-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{str(uuid.uuid4())[:8].upper()}"
             expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-            
+
             save_quote_result = execute_query('''
-                INSERT INTO quotes (
-                    quote_id, customer_id, reseller_id, product_type, quote_data,
-                    total_price, commission_amount, status, created_by, created_at, 
-                    expires_at, share_token, is_shareable, shared_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s)
-                RETURNING id, share_url
-            ''', (
-                quote_id, customer_uuid, reseller_id, product_type, json.dumps(quote_result),
-                total_price, commission_amount, 'active', user_id, expires_at,
-                share_token, create_shareable, datetime.now(timezone.utc) if create_shareable else None
-            ), 'one')
-            
+                                              INSERT INTO quotes (quote_id, customer_id, reseller_id, product_type,
+                                                                  quote_data,
+                                                                  total_price, commission_amount, status, created_by,
+                                                                  created_at,
+                                                                  expires_at, share_token, is_shareable, shared_at,
+                                                                  customer_info)
+                                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s,
+                                                      %s, %s) RETURNING id
+                                              ''', (
+                                                  quote_id, customer_uuid, user_id, product_type,
+                                                  json.dumps(quote_result),
+                                                  total_price, commission_amount, 'active', user_id, expires_at,
+                                                  share_token, create_shareable,
+                                                  datetime.now(timezone.utc) if create_shareable else None,
+                                                  json.dumps(customer_info)
+                                              ), 'one')
+
             if not save_quote_result['success']:
-                return jsonify('Failed to save quote'), 500
-            
-            quote_uuid, share_url = save_quote_result['data']
-            
+                return jsonify(f"Failed to save quote: {save_quote_result.get('error', 'Unknown error')}"), 500
+
+            quote_uuid = save_quote_result['data']['id']
+
             # Log quote creation activity
-            execute_query('''
-                INSERT INTO quote_activities (quote_id, activity_type, actor_type, actor_id, description, ip_address)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (
-                quote_uuid, 'created', 'reseller', user_id, 
-                f'Quote created for product type: {product_type}',
-                request.remote_addr
-            ), 'none')
-            
+            try:
+                execute_query('''
+                              INSERT INTO quote_activities (quote_id, activity_type, actor_type, actor_id, description,
+                                                            ip_address)
+                              VALUES (%s, %s, %s, %s, %s, %s)
+                              ''', (
+                                  quote_uuid, 'created', 'reseller', user_id,
+                                  f'Quote created for customer: {customer_info["first_name"]} {customer_info["last_name"]}',
+                                  request.remote_addr
+                              ), 'none')
+            except Exception:
+                pass  # Don't fail the whole request if activity logging fails
+
             # Prepare response
             response_data = {
                 'success': True,
                 'quote_id': quote_id,
                 'quote_uuid': str(quote_uuid),
+                'customer_id': str(customer_uuid),
                 'expires_at': expires_at.isoformat() + 'Z',
                 'reseller_info': {
                     'reseller_id': str(reseller_id),
@@ -1060,21 +1204,23 @@ def generate_quote_for_customer():
                 },
                 **quote_result
             }
-            
+
             # Add sharing info if applicable
-            if create_shareable and share_url:
+            if create_shareable and share_token:
                 response_data['sharing'] = {
                     'share_token': share_token,
                     'share_url': share_url,
                     'shareable': True
                 }
-            
+
             return jsonify(response_data)
-        
+
         else:
             return jsonify('Database not available'), 503
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify(f'Quote generation failed: {str(e)}'), 500
 
 

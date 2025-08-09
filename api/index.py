@@ -273,68 +273,145 @@ def api_status():
     })
 
 
-@app.route('/quote/<share_token>', methods=['GET'])
+@app.route('/quote/shared/<share_token>', methods=['GET'])
 def view_shared_quote(share_token):
     """Public endpoint for customers to view shared quotes"""
     try:
+        print(f"DEBUG - Looking up shared quote with token: {share_token}")
+
         # Find quote by share token
         quote_result = execute_query('''
-            SELECT q.quote_id, q.product_type, q.quote_data, q.total_price, 
-                   q.expires_at, q.status, c.personal_info, c.contact_info,
-                   r.business_name as reseller_name
-            FROM quotes q
-            JOIN customers c ON q.customer_id = c.id
-            JOIN resellers r ON q.reseller_id = r.user_id
-            WHERE q.share_token = %s AND q.is_shareable = true AND q.status = 'active'
-        ''', (share_token,), 'one')
-        
+                                     SELECT q.quote_id,
+                                            q.product_type,
+                                            q.quote_data,
+                                            q.total_price,
+                                            q.expires_at,
+                                            q.status,
+                                            c.personal_info,
+                                            c.contact_info,
+                                            r.business_name as reseller_name
+                                     FROM quotes q
+                                              JOIN customers c ON q.customer_id = c.id
+                                              JOIN resellers r ON q.reseller_id = r.user_id
+                                     WHERE q.share_token = %s
+                                       AND q.is_shareable = true
+                                       AND q.status = 'active'
+                                     ''', (share_token,), 'one')
+
+        print(f"DEBUG - Quote lookup result: {quote_result}")
+
         if not quote_result['success'] or not quote_result['data']:
-            return jsonify('Quote not found or no longer available'), 404
-        
+            return jsonify({'error': 'Quote not found or no longer available'}), 404
+
+        # Access RealDictRow by column names instead of indices
         quote_data = quote_result['data']
-        
+        quote_id = quote_data['quote_id']
+        product_type = quote_data['product_type']
+        quote_details = quote_data['quote_data']
+        total_price = quote_data['total_price']
+        expires_at = quote_data['expires_at']
+        status = quote_data['status']
+        personal_info = quote_data['personal_info']
+        contact_info = quote_data['contact_info']
+        reseller_name = quote_data['reseller_name']
+
+        print(f"DEBUG - Quote data extracted: ID={quote_id}, Product={product_type}, Price={total_price}")
+
         # Check if quote has expired
-        if quote_data[4] and datetime.now(timezone.utc) > quote_data[4]:
-            return jsonify('Quote has expired'), 410
-        
+        if expires_at:
+            # Handle timezone comparison - make both datetimes timezone-aware or both naive
+            current_time = datetime.now(timezone.utc)
+
+            # If expires_at is naive (no timezone info), assume it's UTC and make it aware
+            if expires_at.tzinfo is None:
+                expires_at_aware = expires_at.replace(tzinfo=timezone.utc)
+            else:
+                expires_at_aware = expires_at
+
+            if current_time > expires_at_aware:
+                return jsonify({'error': 'Quote has expired'}), 410
+
         # Log quote view activity
         quote_uuid_result = execute_query('''
-            SELECT id FROM quotes WHERE share_token = %s
-        ''', (share_token,), 'one')
-        
-        if quote_uuid_result['success']:
-            execute_query('''
-                INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address, user_agent)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (
-                quote_uuid_result['data'][0], 'viewed', 'customer',
-                'Quote viewed via shared link', request.remote_addr, request.user_agent.string
-            ), 'none')
-            
-            # Update customer_accessed_at
-            execute_query('''
-                UPDATE quotes SET customer_accessed_at = CURRENT_TIMESTAMP, customer_ip_address = %s
-                WHERE share_token = %s
-            ''', (request.remote_addr, share_token), 'none')
-        
+                                          SELECT id
+                                          FROM quotes
+                                          WHERE share_token = %s
+                                          ''', (share_token,), 'one')
+
+        if quote_uuid_result['success'] and quote_uuid_result['data']:
+            quote_uuid = quote_uuid_result['data']['id']  # Access by column name
+
+            print(f"DEBUG - Logging quote view activity for quote UUID: {quote_uuid}")
+
+            # Log the activity (handle case where quote_activities table might not have user_agent column)
+            try:
+                activity_result = execute_query('''
+                                                INSERT INTO quote_activities (quote_id, activity_type, actor_type,
+                                                                              description, ip_address, user_agent)
+                                                VALUES (%s, %s, %s, %s, %s, %s)
+                                                ''', (
+                                                    quote_uuid, 'viewed', 'customer',
+                                                    'Quote viewed via shared link', request.remote_addr,
+                                                    request.user_agent.string if request.user_agent else 'Unknown'
+                                                ), 'none')
+
+                print(f"DEBUG - Activity log result: {activity_result}")
+
+            except Exception as activity_error:
+                # If user_agent column doesn't exist, try without it
+                print(f"DEBUG - Activity log with user_agent failed, trying without: {str(activity_error)}")
+                try:
+                    activity_result = execute_query('''
+                                                    INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address)
+                                                    VALUES (%s, %s, %s, %s, %s)
+                                                    ''', (
+                                                        quote_uuid, 'viewed', 'customer',
+                                                        'Quote viewed via shared link', request.remote_addr
+                                                    ), 'none')
+
+                    print(f"DEBUG - Activity log result (without user_agent): {activity_result}")
+
+                except Exception as activity_error2:
+                    print(f"WARNING - Failed to log quote activity: {str(activity_error2)}")
+
+            # Update customer_accessed_at (handle case where these columns might not exist)
+            try:
+                update_result = execute_query('''
+                                              UPDATE quotes
+                                              SET customer_accessed_at = CURRENT_TIMESTAMP,
+                                                  customer_ip_address  = %s
+                                              WHERE share_token = %s
+                                              ''', (request.remote_addr, share_token), 'none')
+
+                print(f"DEBUG - Quote update result: {update_result}")
+
+            except Exception as update_error:
+                print(f"WARNING - Failed to update quote access info: {str(update_error)}")
+
         # Prepare response (remove sensitive data)
         response_data = {
-            'quote_id': quote_data[0],
-            'product_type': quote_data[1],
-            'quote_details': json.loads(quote_data[2]) if quote_data[2] else {},
-            'total_price': float(quote_data[3]),
-            'expires_at': quote_data[4].isoformat() + 'Z' if quote_data[4] else None,
-            'customer_info': json.loads(quote_data[5]) if quote_data[5] else {},
-            'reseller_name': quote_data[7]
+            'quote_id': quote_id,
+            'product_type': product_type,
+            'quote_details': quote_details if quote_details else {},
+            'total_price': float(total_price) if total_price else 0,
+            'expires_at': expires_at.isoformat() + 'Z' if expires_at else None,
+            'customer_info': personal_info if personal_info else {},
+            'contact_info': contact_info if contact_info else {},
+            'reseller_name': reseller_name
         }
-        
+
+        print(f"DEBUG - Returning successful quote response")
+
         return jsonify({
             'success': True,
             'quote': response_data
         })
-        
+
     except Exception as e:
-        return jsonify(f'Failed to fetch quote: {str(e)}'), 500
+        print(f"DEBUG - Exception in view_shared_quote: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to fetch quote: {str(e)}'}), 500
 
 
 @app.route('/quote/<share_token>/accept', methods=['POST'])
@@ -342,67 +419,150 @@ def accept_shared_quote(share_token):
     """Endpoint for customers to accept/purchase from shared quote"""
     try:
         data = request.get_json()
-        
+
         # Find and validate quote
         quote_result = execute_query('''
-            SELECT q.id, q.quote_id, q.customer_id, q.reseller_id, q.total_price, 
-                   q.commission_amount, q.product_type, q.quote_data, q.expires_at
-            FROM quotes q
-            WHERE q.share_token = %s AND q.is_shareable = true AND q.status = 'active'
-        ''', (share_token,), 'one')
-        
+                                     SELECT q.id,
+                                            q.quote_id,
+                                            q.customer_id,
+                                            q.reseller_id,
+                                            q.total_price,
+                                            q.commission_amount,
+                                            q.product_type,
+                                            q.quote_data,
+                                            q.expires_at
+                                     FROM quotes q
+                                     WHERE q.share_token = %s
+                                       AND q.is_shareable = true
+                                       AND q.status = 'active'
+                                     ''', (share_token,), 'one')
+
         if not quote_result['success'] or not quote_result['data']:
-            return jsonify('Quote not found or no longer available'), 404
-        
+            return jsonify({'error': 'Quote not found or no longer available'}), 404
+
+        # Access RealDictRow by column names instead of indices
         quote_info = quote_result['data']
-        
+        quote_uuid = quote_info['id']
+        quote_id = quote_info['quote_id']
+        customer_id = quote_info['customer_id']
+        reseller_id = quote_info['reseller_id']
+        total_price = quote_info['total_price']
+        commission_amount = quote_info['commission_amount']
+        product_type = quote_info['product_type']
+        quote_data = quote_info['quote_data']
+        expires_at = quote_info['expires_at']
+
         # Check if expired
-        if quote_info[8] and datetime.now(timezone.utc) > quote_info[8]:
-            return jsonify('Quote has expired'), 410
-        
-        # Here you would integrate with your payment processing
-        # For now, we'll simulate a successful transaction
-        
-        # Create policy (you'll need to implement this based on your policy creation logic)
-        # policy_result = create_policy_from_quote(quote_info, data)
-        
-        # For demonstration, we'll mark the quote as converted
-        execute_query('''
-            UPDATE quotes 
-            SET converted_to_policy = true, converted_at = CURRENT_TIMESTAMP, status = 'converted'
-            WHERE id = %s
-        ''', (quote_info[0],), 'none')
-        
-        # Create sales record
-        execute_query('''
-            INSERT INTO reseller_sales (
-                reseller_id, quote_id, customer_id, sale_type, product_type,
-                gross_amount, commission_rate, commission_amount, commission_status, sale_date
-            )
-            SELECT %s, %s, %s, %s, %s, %s, r.commission_rate, %s, %s, CURRENT_DATE
-            FROM resellers r WHERE r.user_id = %s
-        ''', (
-            quote_info[3], quote_info[0], quote_info[2], 'quote_conversion', quote_info[6],
-            quote_info[4], quote_info[5], 'pending', quote_info[3]
-        ), 'none')
-        
+        if expires_at:
+            # Handle timezone comparison - make both datetimes timezone-aware or both naive
+            current_time = datetime.now(timezone.utc)
+
+            # If expires_at is naive (no timezone info), assume it's UTC and make it aware
+            if expires_at.tzinfo is None:
+                expires_at_aware = expires_at.replace(tzinfo=timezone.utc)
+            else:
+                expires_at_aware = expires_at
+
+            if current_time > expires_at_aware:
+                return jsonify({'error': 'Quote has expired'}), 410
+
+        # First, let's verify the reseller exists and get their info
+        reseller_check = execute_query('''
+                                       SELECT id, commission_rate, business_name
+                                       FROM resellers
+                                       WHERE user_id = %s
+                                       ''', (reseller_id,), 'one')
+
+        if not reseller_check['success'] or not reseller_check['data']:
+            return jsonify({'error': 'Reseller not found'}), 404
+
+        reseller_data = reseller_check['data']
+        reseller_table_id = reseller_data['id']
+        commission_rate = reseller_data['commission_rate']
+
+        print(f"DEBUG - Reseller table ID: {reseller_table_id}, Commission rate: {commission_rate}")
+
+        # Check if reseller_sales table exists and get its structure
+        table_check = execute_query('''
+                                    SELECT column_name, data_type, is_nullable
+                                    FROM information_schema.columns
+                                    WHERE table_name = 'reseller_sales'
+                                    ORDER BY ordinal_position
+                                    ''', (), 'all')
+
+        print(f"DEBUG - Reseller sales table structure: {table_check}")
+
+        # For demonstration, we'll mark the quote as converted first
+        convert_result = execute_query('''
+                                       UPDATE quotes
+                                       SET converted_to_policy = true,
+                                           converted_at        = CURRENT_TIMESTAMP,
+                                           status              = 'converted'
+                                       WHERE id = %s
+                                       ''', (quote_uuid,), 'none')
+
+        print(f"DEBUG - Quote conversion result: {convert_result}")
+
+        if not convert_result['success']:
+            return jsonify({'error': f'Failed to update quote: {convert_result.get("error", "Unknown error")}'}), 500
+
+        # Try to create sales record with correct foreign key reference
+        try:
+            # The reseller_sales.reseller_id references resellers.user_id, so use reseller_id directly
+            sales_result = execute_query('''
+                                         INSERT INTO reseller_sales (reseller_id, quote_id, customer_id, sale_type,
+                                                                     product_type,
+                                                                     gross_amount, commission_rate, commission_amount,
+                                                                     commission_status, sale_date)
+                                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE)
+                                         ''', (
+                                             reseller_id,  # This is user_id, which matches the foreign key constraint
+                                             quote_uuid,  # quotes.id
+                                             customer_id,  # customers.id
+                                             'quote_conversion',
+                                             product_type,
+                                             total_price,
+                                             commission_rate,  # Required field from resellers table
+                                             commission_amount,
+                                             'pending'
+                                         ), 'none')
+
+            print(f"DEBUG - Sales record creation result: {sales_result}")
+
+            if not sales_result['success']:
+                print(f"WARNING - Failed to create sales record: {sales_result.get('error', 'Unknown error')}")
+        except Exception as sales_error:
+            print(f"WARNING - Exception creating sales record: {str(sales_error)}")
+            # Don't fail the whole request if sales record creation fails
+
         # Log conversion activity
-        execute_query('''
-            INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (
-            quote_info[0], 'converted', 'customer',
-            'Quote converted to policy via shared link', request.remote_addr
-        ), 'none')
-        
+        try:
+            activity_result = execute_query('''
+                                            INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address)
+                                            VALUES (%s, %s, %s, %s, %s)
+                                            ''', (
+                                                quote_uuid, 'converted', 'customer',
+                                                'Quote converted to policy via shared link', request.remote_addr
+                                            ), 'none')
+
+            print(f"DEBUG - Activity log result: {activity_result}")
+
+        except Exception as activity_error:
+            print(f"WARNING - Failed to log activity: {str(activity_error)}")
+            # Don't fail the whole request if activity logging fails
+
         return jsonify({
             'success': True,
             'message': 'Quote accepted successfully',
-            'quote_id': quote_info[1]
+            'quote_id': quote_id,
+            'total_amount': float(total_price) if total_price else 0
         })
-        
+
     except Exception as e:
-        return jsonify(f'Failed to accept quote: {str(e)}'), 500
+        print(f"DEBUG - Exception in accept_shared_quote: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to accept quote: {str(e)}'}), 500
 
 # For local development only
 if __name__ == '__main__':

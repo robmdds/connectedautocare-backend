@@ -11,8 +11,6 @@ class AppConfig:
     """Centralized application configuration"""
     
     def __init__(self):
-
-
         # Database configuration
         self.DATABASE_URL = os.environ.get('DATABASE_URL')
         
