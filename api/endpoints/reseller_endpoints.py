@@ -610,16 +610,22 @@ def get_reseller_customers():
     """Get all customers assigned to this reseller"""
     try:
         user_id = request.current_user.get('user_id')
+        if not user_id:
+            return jsonify({
+                'success': False,
+                'error': 'User ID not found in token'
+            }), 401
+
         search = request.args.get('search', '').strip()
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
-        
+
         offset = (page - 1) * limit
-        
+
         # Build search condition
         search_condition = ""
         params = [user_id]
-        
+
         if search:
             search_condition = '''AND (
                 c.personal_info->>'first_name' ILIKE %s OR
@@ -629,9 +635,9 @@ def get_reseller_customers():
             )'''
             search_param = f'%{search}%'
             params.extend([search_param, search_param, search_param, search_param])
-        
+
         params.extend([limit, offset])
-        
+
         customers_result = execute_query(f'''
             SELECT c.id, c.customer_type, c.personal_info, c.contact_info, c.business_info,
                    c.lifetime_value, c.total_policies, c.active_policies, c.created_at, c.last_activity,
@@ -642,40 +648,66 @@ def get_reseller_customers():
             WHERE c.assigned_reseller_id = %s {search_condition}
             GROUP BY c.id, c.customer_type, c.personal_info, c.contact_info, c.business_info,
                      c.lifetime_value, c.total_policies, c.active_policies, c.created_at, c.last_activity
-            ORDER BY c.last_activity DESC
+            ORDER BY c.last_activity DESC NULLS LAST
             LIMIT %s OFFSET %s
         ''', tuple(params), 'all')
-        
+
+        # Check if query execution was successful
+        if not customers_result.get('success', False):
+            return jsonify({
+                'success': False,
+                'error': 'Failed to execute query'
+            }), 500
+
         # Format customer data
         customers = []
-        for customer_data in customers_result['data'] or []:
-            personal_info = json.loads(customer_data[2]) if customer_data[2] else {}
-            contact_info = json.loads(customer_data[3]) if customer_data[3] else {}
-            business_info = json.loads(customer_data[4]) if customer_data[4] else {}
-            
-            customers.append({
-                'id': str(customer_data[0]),
-                'customer_type': customer_data[1],
-                'name': f"{personal_info.get('first_name', '')} {personal_info.get('last_name', '')}".strip(),
-                'email': contact_info.get('email', ''),
-                'company': business_info.get('company_name', ''),
-                'phone': contact_info.get('phone', ''),
-                'lifetime_value': float(customer_data[5]) if customer_data[5] else 0,
-                'total_policies': customer_data[6] or 0,
-                'active_policies': customer_data[7] or 0,
-                'total_quotes': customer_data[9] or 0,
-                'converted_quotes': customer_data[10] or 0,
-                'created_at': customer_data[8].isoformat() + 'Z',
-                'last_activity': customer_data[8].isoformat() + 'Z' if customer_data[8] else None
-            })
-        
+        for customer_data in customers_result.get('data', []):
+            try:
+                # JSONB fields are already parsed as dicts by psycopg2, no need for json.loads()
+                personal_info = customer_data['personal_info'] if customer_data['personal_info'] else {}
+                contact_info = customer_data['contact_info'] if customer_data['contact_info'] else {}
+                business_info = customer_data['business_info'] if customer_data['business_info'] else {}
+
+                # Handle datetime formatting safely
+                created_at = customer_data['created_at']
+                last_activity = customer_data['last_activity']
+
+                customers.append({
+                    'id': str(customer_data['id']),
+                    'customer_type': customer_data['customer_type'],
+                    'name': f"{personal_info.get('first_name', '')} {personal_info.get('last_name', '')}".strip(),
+                    'email': contact_info.get('email', ''),
+                    'company': business_info.get('company_name', ''),
+                    'phone': contact_info.get('phone', ''),
+                    'lifetime_value': float(customer_data['lifetime_value']) if customer_data[
+                        'lifetime_value'] else 0.0,
+                    'total_policies': customer_data['total_policies'] or 0,
+                    'active_policies': customer_data['active_policies'] or 0,
+                    'total_quotes': customer_data['total_quotes'] or 0,
+                    'converted_quotes': customer_data['converted_quotes'] or 0,
+                    'created_at': created_at.isoformat() + 'Z' if created_at else None,
+                    'last_activity': last_activity.isoformat() + 'Z' if last_activity else None
+                })
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"Error processing customer data: {e}")
+                print(
+                    f"Available keys: {list(customer_data.keys()) if hasattr(customer_data, 'keys') else 'Not a dict-like object'}")
+                continue
+
         return jsonify({
             'success': True,
-            'customers': customers
+            'customers': customers,
+            'total': len(customers),
+            'page': page,
+            'limit': limit
         })
-        
+
     except Exception as e:
-        return jsonify(f'Failed to fetch customers: {str(e)}'), 500
+        print(f"Error in get_reseller_customers: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to fetch customers: {str(e)}'
+        }), 500
 
 
 @reseller_bp.route('/customers', methods=['POST'])
