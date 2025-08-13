@@ -240,6 +240,7 @@ def register():
     except Exception as e:
         return jsonify(f'Registration failed: {str(e)}'), 500
 
+
 @user_auth_bp.route('/login', methods=['POST'])
 def login():
     """User login with database validation using DatabaseAuth"""
@@ -254,9 +255,51 @@ def login():
 
         # Use DatabaseAuth to authenticate (this handles all the database logic)
         auth_result, error_msg = UserAuth.authenticate_user(email, password)
-        
+
         if not auth_result:
             return jsonify(error_msg or 'Invalid credentials'), 401
+
+        # Update login tracking fields after successful authentication
+        user_id = auth_result['user']['id']
+
+        try:
+            db_manager = get_db_manager()
+            if db_manager.available:
+                # Update last_login and increment login_count
+                update_result = execute_query('''
+                                              UPDATE users
+                                              SET last_login  = %s,
+                                                  login_count = COALESCE(login_count, 0) + 1,
+                                                  updated_at  = %s
+                                              WHERE id = %s
+                                              ''', (
+                                                  datetime.now(timezone.utc),
+                                                  datetime.now(timezone.utc),
+                                                  user_id
+                                              ), 'none')
+
+                if update_result['success']:
+                    # Get the updated login count to include in response
+                    count_result = execute_query(
+                        'SELECT login_count FROM users WHERE id = %s',
+                        (user_id,),
+                        'one'
+                    )
+
+                    if count_result['success'] and count_result['data']:
+                        auth_result['user']['login_count'] = count_result['data']['login_count']
+                        auth_result['user']['last_login'] = datetime.now(timezone.utc).isoformat()
+
+        except Exception as update_error:
+            # Log the error but don't fail the login
+            print(f"Warning: Failed to update login tracking: {str(update_error)}")
+
+        # Log security event
+        SecurityUtils.log_security_event(user_id, 'login_successful', {
+            'email': email,
+            'ip_address': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent', '')
+        })
 
         return jsonify({
             'message': 'Login successful',
