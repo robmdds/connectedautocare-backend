@@ -49,19 +49,20 @@ def get_payment_methods():
         }
     })
 
+
 @payment_bp.route('/process', methods=['POST'])
 def process_payment():
     """Updated payment processing with HelcimJS integration"""
     if not PAYMENT_SERVICE_AVAILABLE:
         return jsonify({"error": "Payment processing service not available"}), 503
-        
+
     try:
         data = request.get_json()
-        
+
         # Check if this is a transaction save request (after HelcimJS success)
         if data.get('action') == 'save_transaction':
             return save_helcim_transaction(data.get('transaction_data', {}))
-        
+
         # Original payment processing for financing and other methods
         required_fields = ['amount', 'customer_info', 'payment_method']
         missing_fields = [field for field in required_fields if field not in data]
@@ -70,11 +71,11 @@ def process_payment():
                 'success': False,
                 'error': f'Missing required fields: {", ".join(missing_fields)}'
             }), 400
-        
+
         payment_method = data['payment_method']
         amount = float(data['amount'])
         customer_info = data['customer_info']
-        
+
         # For credit card payments, redirect to HelcimJS
         if payment_method == 'credit_card':
             return jsonify({
@@ -82,18 +83,18 @@ def process_payment():
                 'error': 'Credit card payments must be processed through HelcimJS on the frontend',
                 'redirect_to_helcim': True
             }), 400
-        
+
         # Get client IP address
-        client_ip = request.headers.get('X-Forwarded-For', 
-                                      request.headers.get('X-Real-IP', 
-                                                        request.remote_addr))
+        client_ip = request.headers.get('X-Forwarded-For',
+                                        request.headers.get('X-Real-IP',
+                                                            request.remote_addr))
         if not client_ip or client_ip == '127.0.0.1':
             client_ip = '192.168.1.1'  # Default for testing
-        
+
         # Generate transaction number
         quote_id = data.get('quote_id', f'QUOTE-{int(time.time())}')
         transaction_number = f"TXN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{quote_id.split('-')[-1]}"
-        
+
         # Prepare enhanced payment data
         enhanced_data = {
             **data,
@@ -103,50 +104,49 @@ def process_payment():
             'transaction_number': transaction_number,
             'description': f"ConnectedAutoCare - {data.get('payment_details', {}).get('product_type', 'Protection Plan')}"
         }
-        
+
         # Create initial transaction record
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute('''
-                INSERT INTO transactions (
-                    transaction_number, customer_id, type, amount, 
-                    currency, status, payment_method, metadata, created_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-            ''', (
-                transaction_number,
-                enhanced_data.get('customer_id'),
-                'payment',
-                amount,
-                enhanced_data.get('currency', 'USD'),
-                'processing',
-                json.dumps({
-                    'method': payment_method,
-                    'quote_id': quote_id,
-                    **data.get('payment_details', {})
-                }),
-                json.dumps({
-                    'quote_id': quote_id,
-                    'payment_method': payment_method,
-                    'initiated_at': datetime.now(timezone.utc).isoformat(),
-                    'ip_address': client_ip
-                }),
-                data.get('user_id')
-            ))
-            
+                           INSERT INTO transactions (transaction_number, customer_id, type, amount,
+                                                     currency, status, payment_method, metadata, created_by)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                           ''', (
+                               transaction_number,
+                               enhanced_data.get('customer_id'),
+                               'payment',
+                               amount,
+                               enhanced_data.get('currency', 'USD'),
+                               'processing',
+                               json.dumps({
+                                   'method': payment_method,
+                                   'quote_id': quote_id,
+                                   **data.get('payment_details', {})
+                               }),
+                               json.dumps({
+                                   'quote_id': quote_id,
+                                   'payment_method': payment_method,
+                                   'initiated_at': datetime.now(timezone.utc).isoformat(),
+                                   'ip_address': client_ip
+                               }),
+                               data.get('user_id')
+                           ))
+
             transaction_id = cursor.fetchone()[0]
-            
+
             # Process payment based on method (only financing supported here)
             if payment_method == 'financing':
                 payment_result = setup_financing_plan(enhanced_data, amount, transaction_number)
             else:
                 cursor.execute('''
-                    UPDATE transactions 
-                    SET status = 'failed', processor_response = %s 
-                    WHERE id = %s;
-                ''', (json.dumps({'error': 'Invalid payment method'}), transaction_id))
+                               UPDATE transactions
+                               SET status             = 'failed',
+                                   processor_response = %s
+                               WHERE id = %s;
+                               ''', (json.dumps({'error': 'Invalid payment method'}), transaction_id))
                 conn.commit()
                 cursor.close()
                 conn.close()
@@ -154,26 +154,29 @@ def process_payment():
                     'success': False,
                     'error': f'Unsupported payment method: {payment_method}'
                 }), 400
-            
+
             # Update transaction with payment result
             if payment_result['success']:
                 cursor.execute('''
-                    UPDATE transactions 
-                    SET status = %s, processed_at = CURRENT_TIMESTAMP, 
-                        processor_response = %s, fees = %s, taxes = %s
-                    WHERE id = %s;
-                ''', (
-                    payment_result['status'],
-                    json.dumps(payment_result.get('processor_data', {})),
-                    json.dumps(payment_result.get('fees', {})),
-                    json.dumps(payment_result.get('taxes', {})),
-                    transaction_id
-                ))
-                
+                               UPDATE transactions
+                               SET status             = %s,
+                                   processed_at       = CURRENT_TIMESTAMP,
+                                   processor_response = %s,
+                                   fees               = %s,
+                                   taxes              = %s
+                               WHERE id = %s;
+                               ''', (
+                                   payment_result['status'],
+                                   json.dumps(payment_result.get('processor_data', {})),
+                                   json.dumps(payment_result.get('fees', {})),
+                                   json.dumps(payment_result.get('taxes', {})),
+                                   transaction_id
+                               ))
+
                 conn.commit()
                 cursor.close()
                 conn.close()
-                
+
                 return jsonify({
                     'success': True,
                     'data': {
@@ -194,32 +197,34 @@ def process_payment():
             else:
                 # Payment failed
                 cursor.execute('''
-                    UPDATE transactions 
-                    SET status = 'failed', processor_response = %s 
-                    WHERE id = %s;
-                ''', (json.dumps({'error': payment_result.get('error')}), transaction_id))
+                               UPDATE transactions
+                               SET status             = 'failed',
+                                   processor_response = %s
+                               WHERE id = %s;
+                               ''', (json.dumps({'error': payment_result.get('error')}), transaction_id))
                 conn.commit()
                 cursor.close()
                 conn.close()
-                
+
                 return jsonify({
                     'success': False,
                     'error': payment_result.get('error', 'Payment processing failed'),
                     'details': payment_result.get('processor_data', {}),
                     'solution': payment_result.get('solution', 'Please check your payment information and try again.')
                 }), 400
-                
+
         except Exception as db_error:
             conn.rollback()
             cursor.close()
             conn.close()
             raise db_error
-            
+
     except Exception as e:
         return jsonify({
             'success': False,
             'error': f'Payment processing failed: {str(e)}'
         }), 500
+
 
 def save_helcim_transaction(transaction_data):
     """Save HelcimJS transaction data to database after successful payment"""
@@ -230,127 +235,172 @@ def save_helcim_transaction(transaction_data):
         customer_info = transaction_data.get('customer_info', {})
         billing_info = transaction_data.get('billing_info', {})
         amount = float(transaction_data.get('amount', 0))
-        
+
         # Validate required data
         if not helcim_response:
             return jsonify({
                 'success': False,
                 'error': 'HelcimJS response data required'
             }), 400
-        
+
         if not customer_info.get('email'):
             return jsonify({
                 'success': False,
                 'error': 'Customer email required'
             }), 400
-        
+
+        if amount <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid transaction amount'
+            }), 400
+
         # Generate transaction identifiers
         quote_id = quote_data.get('quote_id', f'QUOTE-{int(time.time())}')
         transaction_number = f"TXN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{quote_id.split('-')[-1]}"
-        customer_id = f"CUST-{customer_info.get('email', '').replace('@', '-').replace('.', '-')}"
-        
+
         # Extract key information from HelcimJS response
         processor_transaction_id = (
-            helcim_response.get('transactionId') or 
-            helcim_response.get('cardBatchId') or 
-            helcim_response.get('id') or 
-            f"HELCIM-{int(time.time())}"
+                helcim_response.get('transactionId') or
+                helcim_response.get('cardBatchId') or
+                helcim_response.get('id') or
+                f"HELCIM-{int(time.time())}"
         )
-        
+
         payment_status = 'approved' if helcim_response.get('approved') else 'completed'
-        
+
         # Get client IP address
-        client_ip = request.headers.get('X-Forwarded-For', 
-                                      request.headers.get('X-Real-IP', 
-                                                        request.remote_addr))
+        client_ip = request.headers.get('X-Forwarded-For',
+                                        request.headers.get('X-Real-IP',
+                                                            request.remote_addr))
         if not client_ip or client_ip == '127.0.0.1':
             client_ip = '192.168.1.1'
-        
+
         # Connect to database
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
-        
+
         try:
-            # Insert transaction record
+            # First, find or create customer using email
+            customer_email = customer_info.get('email', '')
+
+            # Check if customer exists by email
             cursor.execute('''
-                INSERT INTO transactions (
-                    transaction_number, customer_id, type, amount, 
-                    currency, status, payment_method, metadata, 
-                    processed_at, processor_response, created_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-            ''', (
-                transaction_number,
-                customer_id,
-                'payment',
-                amount,
-                transaction_data.get('currency', 'USD'),
-                payment_status,
-                json.dumps({
-                    'method': 'credit_card',
-                    'processor': 'helcim',
-                    'quote_id': quote_id,
-                    'processor_transaction_id': processor_transaction_id
-                }),
-                json.dumps({
-                    'quote_id': quote_id,
-                    'quote_data': quote_data,
-                    'customer_info': customer_info,
-                    'billing_info': billing_info,
-                    'payment_method': 'credit_card',
-                    'product_type': transaction_data.get('product_type', 'unknown'),
-                    'vehicle_info': transaction_data.get('vehicle_info'),
-                    'processed_at': datetime.now(timezone.utc).isoformat(),
-                    'ip_address': client_ip,
-                    'user_agent': request.headers.get('User-Agent', '')
-                }),
-                datetime.now(timezone.utc),
-                json.dumps({
-                    'helcim_response': helcim_response,
-                    'processor': 'helcim',
-                    'transaction_id': processor_transaction_id,
-                    'success': True,
-                    'payment_date': datetime.now(timezone.utc).isoformat()
-                }),
-                transaction_data.get('user_id')
-            ))
-            
+                           SELECT id
+                           FROM customers
+                           WHERE contact_info ->>'email' = %s
+                               LIMIT 1;
+                           ''', (customer_email,))
+
+            existing_customer = cursor.fetchone()
+
+            if existing_customer:
+                customer_id = existing_customer[0]
+
+                # Update existing customer info
+                cursor.execute('''
+                               UPDATE customers
+                               SET personal_info = personal_info || %s,
+                                   contact_info  = contact_info || %s,
+                                   billing_info  = %s,
+                                   updated_at    = CURRENT_TIMESTAMP,
+                                   last_activity = CURRENT_TIMESTAMP
+                               WHERE id = %s;
+                               ''', (
+                                   json.dumps({
+                                       'first_name': customer_info.get('first_name', ''),
+                                       'last_name': customer_info.get('last_name', '')
+                                   }),
+                                   json.dumps({
+                                       'email': customer_email,
+                                       'phone': customer_info.get('phone', '')
+                                   }),
+                                   json.dumps(billing_info),
+                                   customer_id
+                               ))
+            else:
+                # Create new customer
+                cursor.execute('''
+                               INSERT INTO customers (customer_type, personal_info, contact_info, billing_info,
+                                                      created_at, updated_at, last_activity, status)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                               ''', (
+                                   'individual',  # or determine from customer_info if available
+                                   json.dumps({
+                                       'first_name': customer_info.get('first_name', ''),
+                                       'last_name': customer_info.get('last_name', ''),
+                                       'company': customer_info.get('company', '')
+                                   }),
+                                   json.dumps({
+                                       'email': customer_email,
+                                       'phone': customer_info.get('phone', '')
+                                   }),
+                                   json.dumps(billing_info),
+                                   datetime.now(timezone.utc),
+                                   datetime.now(timezone.utc),
+                                   datetime.now(timezone.utc),
+                                   'active'
+                               ))
+
+                customer_id = cursor.fetchone()[0]
+
+            # Now insert transaction record using the UUID customer_id
+            cursor.execute('''
+                           INSERT INTO transactions (transaction_number, customer_id, type, amount,
+                                                     currency, status, payment_method, metadata,
+                                                     processed_at, processor_response, created_by)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                           ''', (
+                               transaction_number,
+                               customer_id,  # Now using the actual UUID from customers table
+                               'payment',
+                               amount,
+                               transaction_data.get('currency', 'USD'),
+                               payment_status,
+                               json.dumps({
+                                   'method': 'credit_card',
+                                   'processor': 'helcim',
+                                   'quote_id': quote_id,
+                                   'processor_transaction_id': processor_transaction_id
+                               }),
+                               json.dumps({
+                                   'quote_id': quote_id,
+                                   'quote_data': quote_data,
+                                   'customer_info': customer_info,
+                                   'billing_info': billing_info,
+                                   'payment_method': 'credit_card',
+                                   'product_type': transaction_data.get('product_type', 'unknown'),
+                                   'vehicle_info': transaction_data.get('vehicle_info'),
+                                   'processed_at': datetime.now(timezone.utc).isoformat(),
+                                   'ip_address': client_ip,
+                                   'user_agent': request.headers.get('User-Agent', '')
+                               }),
+                               datetime.now(timezone.utc),
+                               json.dumps({
+                                   'helcim_response': helcim_response,
+                                   'processor': 'helcim',
+                                   'transaction_id': processor_transaction_id,
+                                   'success': True,
+                                   'payment_date': datetime.now(timezone.utc).isoformat()
+                               }),
+                               transaction_data.get('user_id')
+                           ))
+
             transaction_id = cursor.fetchone()[0]
-            
-            # Insert customer record if doesn't exist
-            cursor.execute('''
-                INSERT INTO customers (
-                    customer_id, first_name, last_name, email, phone,
-                    billing_address, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (email) DO UPDATE SET
-                    first_name = EXCLUDED.first_name,
-                    last_name = EXCLUDED.last_name,
-                    phone = EXCLUDED.phone,
-                    billing_address = EXCLUDED.billing_address,
-                    updated_at = CURRENT_TIMESTAMP;
-            ''', (
-                customer_id,
-                customer_info.get('first_name', ''),
-                customer_info.get('last_name', ''),
-                customer_info.get('email', ''),
-                customer_info.get('phone', ''),
-                json.dumps(billing_info),
-                datetime.now(timezone.utc)
-            ))
-            
-            # Create protection plan record
+
+            # Create protection plan record if quote data exists
+            protection_plan_result = None
             if quote_data:
-                protection_plan_id = create_protection_plan_record(
-                    cursor, transaction_id, quote_data, customer_info, 
+                protection_plan_result = create_protection_plan_record(
+                    cursor, transaction_id, quote_data, customer_id,  # Pass customer_id UUID
                     transaction_data.get('vehicle_info')
                 )
-            
+
             # Commit all changes
             conn.commit()
             cursor.close()
             conn.close()
-            
+
             # Return success response
             return jsonify({
                 'success': True,
@@ -362,7 +412,7 @@ def save_helcim_transaction(transaction_data):
                     'status': payment_status,
                     'amount': amount,
                     'currency': transaction_data.get('currency', 'USD'),
-                    'customer_id': customer_id,
+                    'customer_id': str(customer_id),
                     'next_steps': [
                         'Payment has been processed successfully',
                         'You will receive a confirmation email shortly',
@@ -372,39 +422,42 @@ def save_helcim_transaction(transaction_data):
                     'contract_generation': {
                         'will_generate': True,
                         'estimated_time': '2-3 business days',
-                        'protection_plan_id': protection_plan_id if 'protection_plan_id' in locals() else None
+                        'protection_plan_id': protection_plan_result['plan_id'] if protection_plan_result else None,
+                        'protection_plan_db_id': str(
+                            protection_plan_result['db_id']) if protection_plan_result else None
                     }
                 }
             })
-            
+
         except Exception as db_error:
             conn.rollback()
             cursor.close()
             conn.close()
             raise db_error
-            
+
     except Exception as e:
         return jsonify({
             'success': False,
             'error': f'Failed to save transaction: {str(e)}'
         }), 500
 
-def create_protection_plan_record(cursor, transaction_id, quote_data, customer_info, vehicle_info):
+
+def create_protection_plan_record(cursor, transaction_id, quote_data, customer_id, vehicle_info):
     """Create a protection plan record linked to the transaction"""
     try:
         # Generate protection plan ID
         plan_id = f"PLAN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{transaction_id}"
-        
+
         # Determine plan type and details
         coverage_details = quote_data.get('coverage_details', {})
         product_info = quote_data.get('product_info', {})
-        
+
         plan_type = 'vsc' if vehicle_info else 'hero'
         plan_name = coverage_details.get('coverage_level', product_info.get('product_type', 'Protection Plan'))
-        
+
         # Calculate plan dates
         start_date = datetime.now(timezone.utc).date()
-        
+
         # Determine end date based on plan type
         if plan_type == 'vsc':
             term_months = coverage_details.get('term_months', product_info.get('term_months', 12))
@@ -416,42 +469,40 @@ def create_protection_plan_record(cursor, transaction_id, quote_data, customer_i
             if isinstance(term_years, str):
                 term_years = int(term_years)
             end_date = start_date + timedelta(days=term_years * 365)
-        
+
         # Insert protection plan record
         cursor.execute('''
-            INSERT INTO protection_plans (
-                plan_id, transaction_id, customer_email, plan_type, 
-                plan_name, coverage_details, vehicle_info, 
-                start_date, end_date, status, created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-        ''', (
-            plan_id,
-            transaction_id,
-            customer_info.get('email'),
-            plan_type,
-            plan_name,
-            json.dumps({
-                **coverage_details,
-                **product_info,
-                'quote_data': quote_data
-            }),
-            json.dumps(vehicle_info) if vehicle_info else None,
-            start_date,
-            end_date,
-            'active',
-            datetime.now(timezone.utc)
-        ))
-        
+                       INSERT INTO protection_plans (plan_id, transaction_id, customer_id, plan_type,
+                                                     plan_name, coverage_details, vehicle_info,
+                                                     start_date, end_date, status, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                       ''', (
+                           plan_id,
+                           transaction_id,
+                           customer_id,  # Using UUID customer_id instead of customer_email
+                           plan_type,
+                           plan_name,
+                           json.dumps({
+                               **coverage_details,
+                               **product_info,
+                               'quote_data': quote_data
+                           }),
+                           json.dumps(vehicle_info) if vehicle_info else None,
+                           start_date,
+                           end_date,
+                           'active',
+                           datetime.now(timezone.utc)
+                       ))
+
         protection_plan_db_id = cursor.fetchone()[0]
-        
+
         return {
             'plan_id': plan_id,
             'db_id': protection_plan_db_id,
             'start_date': start_date.isoformat(),
             'end_date': end_date.isoformat()
         }
-        
+
     except Exception as e:
         print(f"Error creating protection plan record: {str(e)}")
         return None

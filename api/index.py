@@ -6,7 +6,10 @@ Modular Flask application with organized endpoint blueprints
 
 import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timezone, timedelta
+
+import psycopg2
 from flask import Flask, jsonify, Blueprint, request
 from flask_cors import CORS
 import json
@@ -86,6 +89,246 @@ except ImportError:
 
 # Initialize Flask app
 app = Flask(__name__)
+
+
+def save_shared_quote_transaction(transaction_data, existing_customer_id):
+    """Save transaction for shared quote with existing customer"""
+    try:
+        helcim_response = transaction_data.get('helcim_response', {})
+        quote_data = transaction_data.get('quote_data', {})
+        customer_info = transaction_data.get('customer_info', {})
+        billing_info = transaction_data.get('billing_info', {})
+        amount = float(transaction_data.get('amount', 0))
+
+        # Validate required data
+        if not helcim_response:
+            return {'success': False, 'error': 'Payment response data required'}
+
+        if amount <= 0:
+            return {'success': False, 'error': 'Invalid transaction amount'}
+
+        # Generate transaction identifiers
+        quote_id = transaction_data.get('quote_id', f'SHARED-{int(time.time())}')
+        transaction_number = f"TXN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{quote_id.split('-')[-1]}"
+
+        # Extract key information from HelcimJS response
+        processor_transaction_id = (
+                helcim_response.get('transactionId') or
+                helcim_response.get('cardBatchId') or
+                helcim_response.get('id') or
+                f"HELCIM-{int(time.time())}"
+        )
+
+        payment_status = 'approved' if helcim_response.get('approved') else 'completed'
+
+        # Get client IP address
+        client_ip = request.headers.get('X-Forwarded-For',
+                                        request.headers.get('X-Real-IP',
+                                                            request.remote_addr))
+        if not client_ip or client_ip == '127.0.0.1':
+            client_ip = '192.168.1.1'
+
+        # Get database URL from environment
+        DATABASE_URL = os.environ.get('DATABASE_URL')
+        if not DATABASE_URL:
+            return {'success': False, 'error': 'Database configuration not available'}
+
+        # Connect to database
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        try:
+            # Update existing customer with payment info
+            if customer_info or billing_info:
+                cursor.execute('''
+                               UPDATE customers
+                               SET personal_info = COALESCE(personal_info, '{}') || %s,
+                                   contact_info  = COALESCE(contact_info, '{}') || %s,
+                                   billing_info  = %s,
+                                   updated_at    = CURRENT_TIMESTAMP,
+                                   last_activity = CURRENT_TIMESTAMP
+                               WHERE id = %s;
+                               ''', (
+                                   json.dumps({
+                                       'first_name': customer_info.get('first_name', ''),
+                                       'last_name': customer_info.get('last_name', '')
+                                   }),
+                                   json.dumps({
+                                       'email': customer_info.get('email', ''),
+                                       'phone': customer_info.get('phone', '')
+                                   }),
+                                   json.dumps(billing_info),
+                                   existing_customer_id
+                               ))
+
+            # Insert transaction record
+            cursor.execute('''
+                           INSERT INTO transactions (transaction_number, customer_id, type, amount,
+                                                     currency, status, payment_method, metadata,
+                                                     processed_at, processor_response, created_by)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                           ''', (
+                               transaction_number,
+                               existing_customer_id,  # Use the existing customer UUID
+                               'payment',
+                               amount,
+                               transaction_data.get('currency', 'USD'),
+                               payment_status,
+                               json.dumps({
+                                   'method': 'credit_card',
+                                   'processor': 'helcim',
+                                   'quote_id': quote_id,
+                                   'processor_transaction_id': processor_transaction_id,
+                                   'share_token': transaction_data.get('share_token')
+                               }),
+                               json.dumps({
+                                   'quote_id': quote_id,
+                                   'quote_data': quote_data,
+                                   'customer_info': customer_info,
+                                   'billing_info': billing_info,
+                                   'payment_method': 'credit_card',
+                                   'product_type': transaction_data.get('product_type', 'unknown'),
+                                   'vehicle_info': transaction_data.get('vehicle_info'),
+                                   'processed_at': datetime.now(timezone.utc).isoformat(),
+                                   'ip_address': client_ip,
+                                   'user_agent': request.headers.get('User-Agent', ''),
+                                   'share_token': transaction_data.get('share_token')
+                               }),
+                               datetime.now(timezone.utc),
+                               json.dumps({
+                                   'helcim_response': helcim_response,
+                                   'processor': 'helcim',
+                                   'transaction_id': processor_transaction_id,
+                                   'success': True,
+                                   'payment_date': datetime.now(timezone.utc).isoformat()
+                               }),
+                               None  # No user_id for shared quote transactions
+                           ))
+
+            transaction_id = cursor.fetchone()[0]
+
+            # Create protection plan record if quote data exists
+            protection_plan_result = None
+            if quote_data:
+                protection_plan_result = create_shared_quote_protection_plan_record(
+                    cursor, transaction_id, quote_data, existing_customer_id,
+                    transaction_data.get('vehicle_info')
+                )
+
+            # Commit all changes
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            # Return success response
+            return {
+                'success': True,
+                'data': {
+                    'transaction_id': str(transaction_id),
+                    'transaction_number': transaction_number,
+                    'confirmation_number': f"CAC-{transaction_number}",
+                    'processor_transaction_id': processor_transaction_id,
+                    'status': payment_status,
+                    'amount': amount,
+                    'currency': transaction_data.get('currency', 'USD'),
+                    'customer_id': str(existing_customer_id),
+                    'protection_plan_id': protection_plan_result['plan_id'] if protection_plan_result else None,
+                    'protection_plan_db_id': str(protection_plan_result['db_id']) if protection_plan_result else None
+                }
+            }
+
+        except Exception as db_error:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+            raise db_error
+
+    except Exception as e:
+        return {'success': False, 'error': f'Failed to save transaction: {str(e)}'}
+
+
+def create_shared_quote_protection_plan_record(cursor, transaction_id, quote_data, customer_id, vehicle_info):
+    """Create a protection plan record for shared quote transaction"""
+    try:
+        # Generate protection plan ID
+        plan_id = f"PLAN-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{transaction_id}"
+
+        # Determine plan type and details from quote data
+        coverage_details = quote_data.get('coverage_details', {})
+        product_info = quote_data.get('product_info', {})
+        pricing = quote_data.get('pricing', {})
+
+        plan_type = 'vsc' if vehicle_info else 'hero'
+        plan_name = (
+                coverage_details.get('coverage_level') or
+                product_info.get('product_type') or
+                quote_data.get('product_type') or
+                'Protection Plan'
+        )
+
+        # Calculate plan dates
+        start_date = datetime.now(timezone.utc).date()
+
+        # Determine end date based on plan type and quote data
+        if plan_type == 'vsc':
+            term_months = (
+                    coverage_details.get('term_months') or
+                    product_info.get('term_months') or
+                    quote_data.get('term_months') or
+                    12
+            )
+            if isinstance(term_months, str):
+                term_months = int(term_months)
+            end_date = start_date + timedelta(days=term_months * 30)
+        else:
+            term_years = (
+                    coverage_details.get('term_years') or
+                    product_info.get('term_years') or
+                    quote_data.get('term_years') or
+                    1
+            )
+            if isinstance(term_years, str):
+                term_years = int(term_years)
+            end_date = start_date + timedelta(days=term_years * 365)
+
+        # Insert protection plan record
+        cursor.execute('''
+                       INSERT INTO protection_plans (plan_id, transaction_id, customer_id, plan_type,
+                                                     plan_name, coverage_details, vehicle_info,
+                                                     start_date, end_date, status, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                       ''', (
+                           plan_id,
+                           transaction_id,
+                           customer_id,  # Using UUID customer_id
+                           plan_type,
+                           plan_name,
+                           json.dumps({
+                               **coverage_details,
+                               **product_info,
+                               'quote_data': quote_data,
+                               'pricing': pricing
+                           }),
+                           json.dumps(vehicle_info) if vehicle_info else None,
+                           start_date,
+                           end_date,
+                           'active',
+                           datetime.now(timezone.utc)
+                       ))
+
+        protection_plan_db_id = cursor.fetchone()[0]
+
+        return {
+            'plan_id': plan_id,
+            'db_id': protection_plan_db_id,
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat()
+        }
+
+    except Exception as e:
+        print(f"Error creating protection plan record: {str(e)}")
+        return None
+
 
 # Load configuration
 if CONFIG_AVAILABLE:
@@ -416,9 +659,13 @@ def view_shared_quote(share_token):
 
 @app.route('/quote/<share_token>/accept', methods=['POST'])
 def accept_shared_quote(share_token):
-    """Endpoint for customers to accept/purchase from shared quote"""
+    """Enhanced endpoint for customers to accept/purchase from shared quote with payment integration"""
     try:
         data = request.get_json()
+        payment_data = data.get('payment_data', {})
+
+        print(f"DEBUG - Accept shared quote called with token: {share_token}")
+        print(f"DEBUG - Payment data present: {bool(payment_data)}")
 
         # Find and validate quote
         quote_result = execute_query('''
@@ -430,17 +677,19 @@ def accept_shared_quote(share_token):
                                             q.commission_amount,
                                             q.product_type,
                                             q.quote_data,
-                                            q.expires_at
+                                            q.expires_at,
+                                            c.personal_info as customer_personal_info,
+                                            c.contact_info  as customer_contact_info
                                      FROM quotes q
+                                              LEFT JOIN customers c ON q.customer_id = c.id
                                      WHERE q.share_token = %s
                                        AND q.is_shareable = true
                                        AND q.status = 'active'
                                      ''', (share_token,), 'one')
 
         if not quote_result['success'] or not quote_result['data']:
-            return jsonify({'error': 'Quote not found or no longer available'}), 404
+            return jsonify({'success': False, 'error': 'Quote not found or no longer available'}), 404
 
-        # Access RealDictRow by column names instead of indices
         quote_info = quote_result['data']
         quote_uuid = quote_info['id']
         quote_id = quote_info['quote_id']
@@ -454,19 +703,16 @@ def accept_shared_quote(share_token):
 
         # Check if expired
         if expires_at:
-            # Handle timezone comparison - make both datetimes timezone-aware or both naive
             current_time = datetime.now(timezone.utc)
-
-            # If expires_at is naive (no timezone info), assume it's UTC and make it aware
             if expires_at.tzinfo is None:
                 expires_at_aware = expires_at.replace(tzinfo=timezone.utc)
             else:
                 expires_at_aware = expires_at
 
             if current_time > expires_at_aware:
-                return jsonify({'error': 'Quote has expired'}), 410
+                return jsonify({'success': False, 'error': 'Quote has expired'}), 410
 
-        # First, let's verify the reseller exists and get their info
+        # Verify reseller exists
         reseller_check = execute_query('''
                                        SELECT id, commission_rate, business_name
                                        FROM resellers
@@ -474,25 +720,53 @@ def accept_shared_quote(share_token):
                                        ''', (reseller_id,), 'one')
 
         if not reseller_check['success'] or not reseller_check['data']:
-            return jsonify({'error': 'Reseller not found'}), 404
+            return jsonify({'success': False, 'error': 'Reseller not found'}), 404
 
         reseller_data = reseller_check['data']
-        reseller_table_id = reseller_data['id']
         commission_rate = reseller_data['commission_rate']
 
-        print(f"DEBUG - Reseller table ID: {reseller_table_id}, Commission rate: {commission_rate}")
+        print(f"DEBUG - Quote found: {quote_id}, Customer: {customer_id}, Reseller: {reseller_id}")
 
-        # Check if reseller_sales table exists and get its structure
-        table_check = execute_query('''
-                                    SELECT column_name, data_type, is_nullable
-                                    FROM information_schema.columns
-                                    WHERE table_name = 'reseller_sales'
-                                    ORDER BY ordinal_position
-                                    ''', (), 'all')
+        # Process payment if payment data is provided
+        payment_result = None
+        if payment_data and payment_data.get('helcim_response'):
+            try:
+                print("DEBUG - Processing payment transaction")
 
-        print(f"DEBUG - Reseller sales table structure: {table_check}")
+                # Save the payment transaction
+                transaction_data = {
+                    'helcim_response': payment_data['helcim_response'],
+                    'quote_data': quote_data,
+                    'customer_info': payment_data.get('customer_info', {}),
+                    'billing_info': payment_data.get('billing_info', {}),
+                    'payment_method': payment_data.get('payment_method', 'credit_card'),
+                    'amount': payment_data.get('amount', total_price),
+                    'product_type': product_type,
+                    'vehicle_info': quote_data.get('vehicle_info') if quote_data else None,
+                    'currency': 'USD',
+                    'share_token': share_token,
+                    'quote_id': quote_id
+                }
 
-        # For demonstration, we'll mark the quote as converted first
+                payment_result = save_shared_quote_transaction(transaction_data, customer_id)
+
+                if not payment_result['success']:
+                    print(f"ERROR - Payment processing failed: {payment_result.get('error')}")
+                    return jsonify({
+                        'success': False,
+                        'error': f'Payment processing failed: {payment_result.get("error", "Unknown error")}'
+                    }), 400
+
+                print("DEBUG - Payment processed successfully")
+
+            except Exception as payment_error:
+                print(f"ERROR - Payment processing exception: {str(payment_error)}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Payment processing failed: {str(payment_error)}'
+                }), 500
+
+        # Update quote status to converted
         convert_result = execute_query('''
                                        UPDATE quotes
                                        SET converted_to_policy = true,
@@ -501,68 +775,80 @@ def accept_shared_quote(share_token):
                                        WHERE id = %s
                                        ''', (quote_uuid,), 'none')
 
-        print(f"DEBUG - Quote conversion result: {convert_result}")
-
         if not convert_result['success']:
-            return jsonify({'error': f'Failed to update quote: {convert_result.get("error", "Unknown error")}'}), 500
+            return jsonify({
+                'success': False,
+                'error': f'Failed to update quote: {convert_result.get("error", "Unknown error")}'
+            }), 500
 
-        # Try to create sales record with correct foreign key reference
+        print("DEBUG - Quote marked as converted")
+
+        # Create sales record for reseller
         try:
-            # The reseller_sales.reseller_id references resellers.user_id, so use reseller_id directly
             sales_result = execute_query('''
                                          INSERT INTO reseller_sales (reseller_id, quote_id, customer_id, sale_type,
-                                                                     product_type,
-                                                                     gross_amount, commission_rate, commission_amount,
-                                                                     commission_status, sale_date)
+                                                                     product_type, gross_amount, commission_rate,
+                                                                     commission_amount, commission_status, sale_date)
                                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE)
                                          ''', (
-                                             reseller_id,  # This is user_id, which matches the foreign key constraint
-                                             quote_uuid,  # quotes.id
-                                             customer_id,  # customers.id
+                                             reseller_id,  # This matches the foreign key constraint
+                                             quote_uuid,  # quotes.id (UUID)
+                                             customer_id,  # customers.id (UUID)
                                              'quote_conversion',
                                              product_type,
                                              total_price,
-                                             commission_rate,  # Required field from resellers table
+                                             commission_rate,
                                              commission_amount,
                                              'pending'
                                          ), 'none')
 
-            print(f"DEBUG - Sales record creation result: {sales_result}")
-
-            if not sales_result['success']:
+            if sales_result['success']:
+                print("DEBUG - Sales record created successfully")
+            else:
                 print(f"WARNING - Failed to create sales record: {sales_result.get('error', 'Unknown error')}")
+
         except Exception as sales_error:
             print(f"WARNING - Exception creating sales record: {str(sales_error)}")
-            # Don't fail the whole request if sales record creation fails
 
         # Log conversion activity
         try:
             activity_result = execute_query('''
-                                            INSERT INTO quote_activities (quote_id, activity_type, actor_type, description, ip_address)
+                                            INSERT INTO quote_activities (quote_id, activity_type, actor_type,
+                                                                          description, ip_address)
                                             VALUES (%s, %s, %s, %s, %s)
                                             ''', (
                                                 quote_uuid, 'converted', 'customer',
-                                                'Quote converted to policy via shared link', request.remote_addr
+                                                'Quote converted to policy via shared link',
+                                                request.remote_addr
                                             ), 'none')
 
-            print(f"DEBUG - Activity log result: {activity_result}")
+            if activity_result['success']:
+                print("DEBUG - Activity logged successfully")
 
         except Exception as activity_error:
             print(f"WARNING - Failed to log activity: {str(activity_error)}")
-            # Don't fail the whole request if activity logging fails
 
-        return jsonify({
+        # Prepare response
+        response_data = {
             'success': True,
             'message': 'Quote accepted successfully',
             'quote_id': quote_id,
-            'total_amount': float(total_price) if total_price else 0
-        })
+            'total_amount': float(total_price) if total_price else 0,
+            'payment_processed': bool(payment_data and payment_result)
+        }
+
+        # Add transaction data if payment was processed
+        if payment_result and payment_result.get('success'):
+            response_data['transaction_data'] = payment_result['data']
+
+        print("DEBUG - Returning successful response")
+        return jsonify(response_data)
 
     except Exception as e:
-        print(f"DEBUG - Exception in accept_shared_quote: {str(e)}")
+        print(f"ERROR - Exception in accept_shared_quote: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f'Failed to accept quote: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': f'Failed to accept quote: {str(e)}'}), 500
 
 # For local development only
 if __name__ == '__main__':
