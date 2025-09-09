@@ -237,7 +237,7 @@ def calculate_pricing_preview():
         if settings_service.connection_available:
             admin_fee = get_admin_fee('hero')
             wholesale_discount_rate = get_wholesale_discount()
-            tax_rate = get_tax_rate(state)
+            tax_rate = get_tax_rate()
             processing_fee = get_processing_fee()
             fee_source = 'database'
         else:
@@ -340,7 +340,7 @@ def get_system_settings_for_products():
                     'wholesale_discount_rate': 0.15
                 },
                 'taxes': {
-                    'default_tax_rate': 0.08,
+                    'default_tax_rate': 0.00,
                     'fl_tax_rate': 0.07,
                     'ca_tax_rate': 0.0875,
                     'ny_tax_rate': 0.08,
@@ -581,7 +581,7 @@ def get_admin_products():
             system_settings = {
                 'hero_admin_fee': 25.00,
                 'wholesale_discount_rate': 0.15,
-                'default_tax_rate': 0.08,
+                'default_tax_rate': 0.00,
                 'fl_tax_rate': 0.07,
                 'ca_tax_rate': 0.0875,
                 'ny_tax_rate': 0.08,
