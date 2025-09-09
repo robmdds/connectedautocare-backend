@@ -63,7 +63,7 @@ class HeroRatingService:
         self.admin_fee = 25.00
         self.wholesale_discount_rate = 0.15
         self.processing_fee = 15.00
-        self.default_tax_rate = 0.07
+        self.default_tax_rate = 0.00
         print("⚠️ Using fallback settings - database not available")
     
     def refresh_settings(self):

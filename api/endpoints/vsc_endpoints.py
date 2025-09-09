@@ -38,7 +38,7 @@ except ImportError as e:
     def get_vsc_coverage_options(): return {}
     def calculate_vsc_price(*args, **kwargs): return {"success": False, "error": "VSC pricing not available"}
     def get_admin_fee(*args): return 50.00
-    def get_tax_rate(*args): return 0.07
+    def get_tax_rate(*args): return 0.00
     def get_processing_fee(): return 15.00
     def get_dealer_fee(): return 50.00
     
@@ -204,7 +204,7 @@ def generate_vsc_quote():
                 else:
                     # Fallback values
                     admin_fee = 50.00
-                    tax_rate = 0.07
+                    tax_rate = 0.00
                     processing_fee = 15.00
                     dealer_fee = 50.00
                     fee_source = 'hardcoded_fallback'
