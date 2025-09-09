@@ -111,7 +111,7 @@ class HeroRatingService:
             subtotal *= wholesale_multiplier
         
         subtotal_with_fee = subtotal + self.admin_fee
-        tax_rate = get_tax_rate(state) if self.database_settings_available else self.default_tax_rate
+        tax_rate = get_tax_rate() if self.database_settings_available else self.default_tax_rate
         tax_amount = subtotal_with_fee * tax_rate
         total_price = subtotal_with_fee + tax_amount
         monthly_payment = total_price / (term_years * 12)
