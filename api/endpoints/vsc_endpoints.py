@@ -485,7 +485,7 @@ def generate_vsc_quote_from_vin():
                 # Get dynamic fees from database
                 if settings_service.connection_available:
                     admin_fee = get_admin_fee('vsc')
-                    tax_rate = get_tax_rate('FL')
+                    tax_rate = get_tax_rate(data.get('state'))
                     processing_fee = get_processing_fee()
                     dealer_fee = get_dealer_fee()
                     fee_source = 'database'

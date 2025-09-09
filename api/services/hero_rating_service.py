@@ -51,7 +51,7 @@ class HeroRatingService:
                 self.admin_fee = get_admin_fee('hero')
                 self.wholesale_discount_rate = get_wholesale_discount()
                 self.processing_fee = get_processing_fee()
-                self.default_tax_rate = get_tax_rate()
+                self.default_tax_rate = get_tax_rate(None)
                 print(f"✅ Loaded database settings - Admin fee: ${self.admin_fee}, Wholesale discount: {self.wholesale_discount_rate*100}%")
             except Exception as e:
                 print(f"⚠️ Error loading database settings, using defaults: {e}")

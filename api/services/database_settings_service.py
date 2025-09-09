@@ -255,13 +255,27 @@ def get_wholesale_discount() -> float:
         return float(discount)
     return 0.15
 
-def get_tax_rate(state: str = 'FL') -> float:
+
+def get_tax_rate(state: str = None) -> float:
+    """
+    Get tax rate from database settings.
+    If no state is provided, returns default_tax_rate.
+    If state is provided, tries state-specific rate first, then falls back to default.
+    """
     if settings_service.connection_available:
-        tax_rate = settings_service.get_admin_setting('taxes', f'{state.lower()}_tax_rate')
-        if tax_rate is None:
+        if state is None:
+            # No state specified - get default tax rate directly
             tax_rate = settings_service.get_admin_setting('taxes', 'default_tax_rate', 0.07)
+        else:
+            # State specified - try state-specific rate first
+            tax_rate = settings_service.get_admin_setting('taxes', f'{state.lower()}_tax_rate')
+            if tax_rate is None:
+                # Fall back to default if state-specific rate not found
+                tax_rate = settings_service.get_admin_setting('taxes', 'default_tax_rate', 0.07)
         return float(tax_rate)
-    return 0.07
+
+    # Database not available - return hardcoded fallback
+    return 0.00
 
 def get_processing_fee() -> float:
     if settings_service.connection_available:
