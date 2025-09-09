@@ -66,142 +66,254 @@ def analytics_health():
         'timestamp': datetime.now(timezone.utc).isoformat() + "Z"
     })
 
+
+"""
+Enhanced Analytics Dashboard - Updated to include contract data
+"""
+
+
 @analytics_bp.route('/dashboard', methods=['GET'])
 @token_required
 @role_required('wholesale_reseller')
 def get_dashboard():
-    """Get analytics dashboard data"""
+    """Get analytics dashboard data including contract metrics"""
     try:
         user_id = request.current_user.get('user_id')
         user_role = request.current_user.get('role')
         date_range = request.args.get('date_range', '30')  # days
-        
+
         # Calculate date range
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=int(date_range))
-        
+
         db_manager = get_db_manager()
-        
+
         if db_manager.available:
-            # Get transactions data
+            # Get combined transaction and contract data
+
+            # 1. Traditional transaction metrics
             transactions_result = execute_query('''
-                SELECT 
-                    COUNT(*) as total_transactions,
-                    COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_transactions,
-                    COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_transactions,
-                    COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) as total_revenue,
-                    COALESCE(AVG(CASE WHEN status = 'completed' THEN amount ELSE NULL END), 0) as avg_transaction_amount
-                FROM transactions 
-                WHERE created_at >= %s AND created_at <= %s
-            ''', (start_date, end_date), 'one')
-            
-            # Get daily revenue trend
-            daily_revenue_result = execute_query('''
-                SELECT 
-                    DATE(created_at) as date,
-                    COUNT(*) as transaction_count,
-                    COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) as daily_revenue
-                FROM transactions 
-                WHERE created_at >= %s AND created_at <= %s
-                GROUP BY DATE(created_at)
-                ORDER BY date
-            ''', (start_date, end_date))
-            
-            # Get product performance
+                                                SELECT COUNT(*)                                                                as total_transactions,
+                                                       COUNT(CASE WHEN status = 'completed' THEN 1 END)                        as completed_transactions,
+                                                       COUNT(CASE WHEN status = 'failed' THEN 1 END)                           as failed_transactions,
+                                                       COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) as total_revenue,
+                                                       COALESCE(
+                                                               AVG(CASE WHEN status = 'completed' THEN amount ELSE NULL END),
+                                                               0)                                                              as avg_transaction_amount
+                                                FROM transactions
+                                                WHERE created_at >= %s
+                                                  AND created_at <= %s
+                                                ''', (start_date, end_date), 'one')
+
+            # 2. Contract metrics
+            contract_metrics_result = execute_query('''
+                                                    SELECT COUNT(*)                                         as total_contracts,
+                                                           COUNT(CASE WHEN status = 'active' THEN 1 END)    as active_contracts,
+                                                           COUNT(CASE WHEN status = 'signed' THEN 1 END)    as signed_contracts,
+                                                           COUNT(CASE WHEN generated_date >= %s THEN 1 END) as contracts_this_period
+                                                    FROM generated_contracts
+                                                    WHERE generated_date >= %s - INTERVAL '90 days'
+                                                    ''', (start_date, start_date), 'one')
+
+            # 3. Revenue from contracts (if contract_value exists)
+            contract_revenue_result = execute_query('''
+                                                    SELECT COALESCE(SUM(contract_value), 0) as contract_revenue,
+                                                           COUNT(*)                         as revenue_generating_contracts
+                                                    FROM generated_contracts
+                                                    WHERE generated_date >= %s
+                                                      AND generated_date <= %s
+                                                      AND contract_value IS NOT NULL
+                                                      AND contract_value > 0
+                                                    ''', (start_date, end_date), 'one')
+
+            # 4. Daily trends combining both sources
+            daily_trends_result = execute_query('''
+                                                WITH transaction_daily AS (SELECT
+                                                    DATE (created_at) as date
+                                                   , COUNT (*) as transaction_count
+                                                   , COALESCE (SUM (CASE WHEN status = 'completed' THEN amount ELSE 0 END)
+                                                   , 0) as transaction_revenue
+                                                FROM transactions
+                                                WHERE created_at >= %s
+                                                  AND created_at <= %s
+                                                GROUP BY DATE (created_at)
+                                                    ),
+                                                    contract_daily AS (
+                                                SELECT
+                                                    DATE (generated_date) as date, COUNT (*) as contract_count, COALESCE (SUM (contract_value), 0) as contract_revenue
+                                                FROM generated_contracts
+                                                WHERE generated_date >= %s
+                                                  AND generated_date <= %s
+                                                GROUP BY DATE (generated_date)
+                                                    )
+                                                SELECT COALESCE(t.date, c.date) as date,
+                    COALESCE(t.transaction_count, 0) as transaction_count,
+                    COALESCE(t.transaction_revenue, 0) as transaction_revenue,
+                    COALESCE(c.contract_count, 0) as contract_count,
+                    COALESCE(c.contract_revenue, 0) as contract_revenue,
+                    COALESCE(t.transaction_revenue, 0) + COALESCE(c.contract_revenue, 0) as total_daily_revenue
+                                                FROM transaction_daily t
+                                                    FULL OUTER JOIN contract_daily c
+                                                ON t.date = c.date
+                                                ORDER BY date
+                                                ''', (start_date, end_date, start_date, end_date))
+
+            # 5. Product performance including contracts
             product_performance_result = execute_query('''
-                SELECT 
-                    metadata->>'product_type' as product_type,
-                    COUNT(*) as quote_count,
-                    COUNT(CASE WHEN status = 'completed' THEN 1 END) as conversion_count,
-                    COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) as revenue
-                FROM transactions 
-                WHERE created_at >= %s AND created_at <= %s
-                AND metadata->>'product_type' IS NOT NULL
-                GROUP BY metadata->>'product_type'
-                ORDER BY revenue DESC
-            ''', (start_date, end_date))
-            
-            # Build dashboard data
+                                                       WITH transaction_products
+                                                                AS (SELECT COALESCE(metadata ->>'product_type', 'unknown')                         as product_type,
+                                                                           COUNT(*)                                                                as quote_count,
+                                                                           COUNT(CASE WHEN status = 'completed' THEN 1 END)                        as conversion_count,
+                                                                           COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) as revenue
+                                                                    FROM transactions
+                                                                    WHERE created_at >= %s
+                                                                      AND created_at <= %s
+                                                                      AND metadata ->>'product_type' IS NOT NULL
+                                                       GROUP BY metadata->>'product_type'
+                                                           ),
+                                                           contract_products AS (
+                                                       SELECT
+                                                           COALESCE (product_type, 'contract') as product_type, COUNT (*) as contract_count, COUNT (CASE WHEN status IN ('active', 'signed') THEN 1 END) as active_contracts, COALESCE (SUM (contract_value), 0) as contract_revenue
+                                                       FROM generated_contracts gc
+                                                           JOIN contract_templates ct
+                                                       ON gc.template_id = ct.template_id
+                                                       WHERE gc.generated_date >= %s
+                                                         AND gc.generated_date <= %s
+                                                       GROUP BY ct.product_type
+                                                           )
+                                                       SELECT COALESCE(tp.product_type, cp.product_type)                 as product_type,
+                                                              COALESCE(tp.quote_count, 0)                                as quote_count,
+                                                              COALESCE(tp.conversion_count, 0)                           as conversion_count,
+                                                              COALESCE(tp.revenue, 0)                                    as transaction_revenue,
+                                                              COALESCE(cp.contract_count, 0)                             as contract_count,
+                                                              COALESCE(cp.active_contracts, 0)                           as active_contracts,
+                                                              COALESCE(cp.contract_revenue, 0)                           as contract_revenue,
+                                                              COALESCE(tp.revenue, 0) + COALESCE(cp.contract_revenue, 0) as total_revenue
+                                                       FROM transaction_products tp
+                                                                FULL OUTER JOIN contract_products cp ON tp.product_type = cp.product_type
+                                                       ORDER BY total_revenue DESC
+                                                       ''', (start_date, end_date, start_date, end_date))
+
+            # Build comprehensive dashboard data
             dashboard_data = {
                 'period': {
                     'start_date': start_date.isoformat(),
                     'end_date': end_date.isoformat(),
                     'days': int(date_range)
                 },
-                'overview': {},
-                'trends': {
-                    'daily_revenue': [],
-                    'conversion_rate': 0
+                'revenue_metrics': {
+                    'total_revenue': 0,
+                    'current_period_revenue': 0,
+                    'average_transaction_value': 0,
+                    'growth_rate': 0,
+                    'revenue_by_period': {}
                 },
-                'products': []
+                'customer_metrics': {
+                    'total_customers': 0,
+                    'new_customers_this_month': 0,
+                    'retention_rate': 85.0  # Default value
+                },
+                'product_metrics': {
+                    'product_metrics': {}
+                },
+                'operational_metrics': {
+                    'active_policies': 0,
+                    'total_transactions': 0,
+                    'policies_expiring_soon': 0
+                }
             }
-            
-            # Process overview metrics
+
+            # Process transaction metrics
             if transactions_result['success'] and transactions_result['data']:
                 txn_data = transactions_result['data']
-                total_txns = txn_data['total_transactions'] or 0
-                completed_txns = txn_data['completed_transactions'] or 0
-                
-                dashboard_data['overview'] = {
-                    'total_transactions': total_txns,
-                    'completed_transactions': completed_txns,
-                    'failed_transactions': txn_data['failed_transactions'] or 0,
-                    'total_revenue': float(txn_data['total_revenue'] or 0),
-                    'avg_transaction_amount': float(txn_data['avg_transaction_amount'] or 0),
-                    'conversion_rate': round((completed_txns / total_txns * 100), 2) if total_txns > 0 else 0
-                }
-            
+                dashboard_data['revenue_metrics']['current_period_revenue'] = float(txn_data['total_revenue'] or 0)
+                dashboard_data['revenue_metrics']['average_transaction_value'] = float(
+                    txn_data['avg_transaction_amount'] or 0)
+                dashboard_data['operational_metrics']['total_transactions'] = txn_data['total_transactions'] or 0
+
+            # Process contract metrics
+            if contract_metrics_result['success'] and contract_metrics_result['data']:
+                contract_data = contract_metrics_result['data']
+                dashboard_data['operational_metrics']['active_policies'] = contract_data['active_contracts'] or 0
+                dashboard_data['operational_metrics']['policies_expiring_soon'] = 0  # Would need expiration date logic
+
+            # Add contract revenue to total revenue
+            if contract_revenue_result['success'] and contract_revenue_result['data']:
+                contract_rev = float(contract_revenue_result['data']['contract_revenue'] or 0)
+                dashboard_data['revenue_metrics']['current_period_revenue'] += contract_rev
+                dashboard_data['revenue_metrics']['total_revenue'] = dashboard_data['revenue_metrics'][
+                    'current_period_revenue']
+
             # Process daily trends
-            if daily_revenue_result['success'] and daily_revenue_result['data']:
-                for row in daily_revenue_result['data']:
-                    dashboard_data['trends']['daily_revenue'].append({
-                        'date': row['date'].isoformat(),
-                        'transaction_count': row['transaction_count'],
-                        'revenue': float(row['daily_revenue'])
-                    })
-            
+            if daily_trends_result['success'] and daily_trends_result['data']:
+                for row in daily_trends_result['data']:
+                    date_key = row['date'].strftime('%Y-%m')
+                    if date_key not in dashboard_data['revenue_metrics']['revenue_by_period']:
+                        dashboard_data['revenue_metrics']['revenue_by_period'][date_key] = 0
+                    dashboard_data['revenue_metrics']['revenue_by_period'][date_key] += float(
+                        row['total_daily_revenue'])
+
             # Process product performance
             if product_performance_result['success'] and product_performance_result['data']:
                 for row in product_performance_result['data']:
-                    conversion_rate = 0
-                    if row['quote_count'] > 0:
-                        conversion_rate = round((row['conversion_count'] / row['quote_count'] * 100), 2)
-                    
-                    dashboard_data['products'].append({
-                        'product_type': row['product_type'],
-                        'quote_count': row['quote_count'],
-                        'conversion_count': row['conversion_count'],
-                        'conversion_rate': conversion_rate,
-                        'revenue': float(row['revenue'])
-                    })
-            
+                    product_type = row['product_type']
+                    dashboard_data['product_metrics']['product_metrics'][product_type] = {
+                        'total_revenue': float(row['total_revenue']),
+                        'sales_count': (row['conversion_count'] or 0) + (row['active_contracts'] or 0),
+                        'quote_count': row['quote_count'] or 0,
+                        'contract_count': row['contract_count'] or 0
+                    }
+
+            # Calculate estimated customer count (would be better with proper customer table)
+            try:
+                customer_count_result = execute_query('''
+                                                      SELECT COUNT(DISTINCT customer_id) as total_customers
+                                                      FROM (SELECT customer_id
+                                                            FROM transactions
+                                                            WHERE customer_id IS NOT NULL
+                                                            UNION
+                                                            SELECT customer_data ->>'customer_id' as customer_id
+                                                            FROM generated_contracts
+                                                            WHERE customer_data->>'customer_id' IS NOT NULL) combined_customers
+                                                      ''', (), 'one')
+
+                if customer_count_result['success'] and customer_count_result['data']:
+                    dashboard_data['customer_metrics']['total_customers'] = customer_count_result['data'][
+                                                                                'total_customers'] or 0
+            except:
+                dashboard_data['customer_metrics']['total_customers'] = 0
+
             return jsonify(dashboard_data)
-        
+
         else:
-            # Fallback analytics for when database is not available
-            fallback_data = {
-                'period': {
-                    'start_date': start_date.isoformat(),
-                    'end_date': end_date.isoformat(),
-                    'days': int(date_range)
+            # Enhanced fallback data that matches the expected structure
+            return jsonify({
+                'revenue_metrics': {
+                    'total_revenue': 0,
+                    'current_period_revenue': 0,
+                    'average_transaction_value': 0,
+                    'growth_rate': 0,
+                    'revenue_by_period': {}
                 },
-                'overview': {
+                'customer_metrics': {
+                    'total_customers': 0,
+                    'new_customers_this_month': 0,
+                    'retention_rate': 0
+                },
+                'product_metrics': {
+                    'product_metrics': {}
+                },
+                'operational_metrics': {
+                    'active_policies': 0,
                     'total_transactions': 0,
-                    'completed_transactions': 0,
-                    'failed_transactions': 0,
-                    'total_revenue': 0.0,
-                    'avg_transaction_amount': 0.0,
-                    'conversion_rate': 0.0
+                    'policies_expiring_soon': 0
                 },
-                'trends': {'daily_revenue': []},
-                'products': [],
                 'message': 'Database not available - showing placeholder data'
-            }
-            
-            return jsonify(fallback_data)
+            })
 
     except Exception as e:
-        return jsonify(f'Failed to generate dashboard: {str(e)}'), 500
+        return jsonify({'error': f'Failed to generate dashboard: {str(e)}'}), 500
+
 
 @analytics_bp.route('/customer-dashboard', methods=['GET'])
 @token_required

@@ -3,7 +3,7 @@ Payment Processing Endpoints
 Helcim integration, financing, and payment management
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from datetime import datetime, timezone, timedelta
 import json
 import time
@@ -1015,3 +1015,416 @@ def helcim_webhook():
     except Exception as e:
         print(f"❌ Webhook processing error: {str(e)}")
         return jsonify({'error': 'Webhook processing failed'}), 500
+
+
+@payment_bp.route('/<transaction_id>/generate-contract', methods=['POST'])
+def generate_contract_for_transaction(transaction_id):
+    """Generate contract for a completed transaction using your existing schema"""
+    if not PAYMENT_SERVICE_AVAILABLE:
+        return jsonify({"error": "Payment service not available"}), 503
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Get transaction details with customer info
+        cursor.execute('''
+                       SELECT t.id,
+                              t.transaction_number,
+                              t.customer_id,
+                              t.amount,
+                              t.status,
+                              t.payment_method,
+                              t.processor_response,
+                              t.metadata,
+                              t.created_at,
+                              c.first_name,
+                              c.last_name,
+                              c.email,
+                              c.phone,
+                              c.address,
+                              c.billing_address
+                       FROM transactions t
+                                LEFT JOIN customers c ON t.customer_id = c.id
+                       WHERE t.id = %s
+                          OR t.transaction_number = %s
+                       ''', (transaction_id, transaction_id))
+
+        transaction = cursor.fetchone()
+        if not transaction:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Transaction not found'
+            }), 404
+
+        # Check if transaction is completed
+        if transaction['status'] not in ['completed', 'approved']:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': 'Cannot generate contract for incomplete transaction'
+            }), 400
+
+        # Check if contract already exists using transaction_id
+        cursor.execute('''
+                       SELECT id, contract_number, status
+                       FROM generated_contracts
+                       WHERE transaction_id = %s
+                       ''', (transaction['transaction_number'],))
+
+        existing_contract = cursor.fetchone()
+        if existing_contract:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'success': True,
+                'contract_id': existing_contract['id'],
+                'contract_number': existing_contract['contract_number'],
+                'status': existing_contract['status'],
+                'message': 'Contract already exists'
+            })
+
+        # Extract metadata for contract generation
+        metadata = transaction['metadata'] if transaction['metadata'] else {}
+        product_type = metadata.get('product_type', 'protection_plan')
+
+        # Generate contract number
+        contract_number = f"CAC-{product_type.upper()}-{transaction['transaction_number']}"
+
+        # Get appropriate template from your contract_templates table
+        cursor.execute('''
+                       SELECT id, template_id, name
+                       FROM contract_templates
+                       WHERE product_type = %s
+                         AND active = true
+                       ORDER BY created_at DESC LIMIT 1
+                       ''', (product_type,))
+
+        template = cursor.fetchone()
+        template_id = template['id'] if template else None
+
+        # Prepare customer_data for your schema
+        customer_data = {
+            'first_name': transaction['first_name'],
+            'last_name': transaction['last_name'],
+            'email': transaction['email'],
+            'phone': transaction['phone'],
+            'address': transaction['address'],
+            'billing_address': transaction['billing_address']
+        }
+
+        # Prepare contract_data for your schema
+        contract_data = {
+            'transaction_info': {
+                'transaction_number': transaction['transaction_number'],
+                'amount': float(transaction['amount']),
+                'payment_method': transaction['payment_method'],
+                'processor_response': transaction['processor_response'],
+                'transaction_date': transaction['created_at'].isoformat() if transaction['created_at'] else None
+            },
+            'product_info': {
+                'product_type': product_type,
+                'metadata': metadata
+            },
+            'generation_info': {
+                'generated_via': 'payment_api',
+                'template_used': template['template_id'] if template else 'default',
+                'generated_at': datetime.now(timezone.utc).isoformat()
+            }
+        }
+
+        # Insert into generated_contracts table using your schema
+        cursor.execute('''
+                       INSERT INTO generated_contracts
+                       (contract_number, transaction_id, template_id, customer_id,
+                        customer_data, contract_data, status, generated_date, created_by)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                       ''', (
+                           contract_number,
+                           transaction['transaction_number'],  # Links to transaction
+                           template_id,
+                           transaction['customer_id'],
+                           json.dumps(customer_data),
+                           json.dumps(contract_data),
+                           'completed',  # Status: draft, completed, signed
+                           datetime.now(timezone.utc),
+                           transaction['created_by']  # Who created this
+                       ))
+
+        contract_id = cursor.fetchone()[0]
+
+        # Log activity in contract_activities table
+        cursor.execute('''
+                       INSERT INTO contract_activities
+                           (contract_id, activity_type, description, performed_by, performed_at)
+                       VALUES (%s, %s, %s, %s, %s)
+                       ''', (
+                           contract_id,
+                           'generated',
+                           f'Contract generated for transaction {transaction["transaction_number"]}',
+                           'system',
+                           datetime.now(timezone.utc)
+                       ))
+
+        # Update transaction to mark contract as generated
+        # Check if contract_generated column exists first
+        cursor.execute('''
+                       SELECT EXISTS (SELECT
+                                      FROM information_schema.columns
+                                      WHERE table_name = 'transactions'
+                                        AND column_name = 'contract_generated');
+                       ''')
+
+        has_contract_col = cursor.fetchone()['exists']
+
+        if has_contract_col:
+            cursor.execute('''
+                           UPDATE transactions
+                           SET contract_generated = true,
+                               contract_id        = %s
+                           WHERE id = %s
+                           ''', (contract_id, transaction['id']))
+        else:
+            # Update metadata to include contract info
+            updated_metadata = metadata.copy()
+            updated_metadata.update({
+                'contract_generated': True,
+                'contract_id': str(contract_id),
+                'contract_number': contract_number
+            })
+
+            cursor.execute('''
+                           UPDATE transactions
+                           SET metadata = %s
+                           WHERE id = %s
+                           ''', (json.dumps(updated_metadata), transaction['id']))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'contract_id': str(contract_id),
+            'contract_number': contract_number,
+            'status': 'completed',
+            'generated_at': datetime.now(timezone.utc).isoformat()
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Failed to generate contract: {str(e)}'
+        }), 500
+
+
+@payment_bp.route('/<transaction_id>/download-contract', methods=['GET'])
+def download_contract_pdf(transaction_id):
+    """Download contract PDF using the PDF generator"""
+    try:
+        # Import your PDF generation functions
+        from api.generate_contract_pdf import get_contract_by_transaction, create_contract_pdf
+
+        # Get contract data
+        contract = get_contract_by_transaction(transaction_id)
+        if not contract:
+            return jsonify({'error': 'Contract not found'}), 404
+
+        # Generate PDF
+        pdf_path = create_contract_pdf(contract)
+        if not pdf_path:
+            return jsonify({'error': 'Failed to generate PDF'}), 500
+
+        # Return PDF file
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=f'Contract-{contract["contract_number"]}.pdf',
+            mimetype='application/pdf'
+        )
+
+    except Exception as e:
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
+
+@payment_bp.route('/backfill-contracts', methods=['POST'])
+def backfill_contracts():
+    """Generate contracts for existing completed transactions"""
+    if not PAYMENT_SERVICE_AVAILABLE:
+        return jsonify({"error": "Payment service not available"}), 503
+
+    try:
+        data = request.get_json() or {}
+        dry_run = data.get('dry_run', False)
+        limit = data.get('limit', 100)
+
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Find completed transactions without contracts
+        cursor.execute('''
+                       SELECT t.id,
+                              t.transaction_number,
+                              t.customer_id,
+                              t.amount,
+                              t.status,
+                              t.payment_method,
+                              t.processor_response,
+                              t.metadata,
+                              t.created_at,
+                              c.first_name,
+                              c.last_name,
+                              c.email,
+                              c.phone,
+                              c.address,
+                              c.billing_address
+                       FROM transactions t
+                                LEFT JOIN customers c ON t.customer_id = c.id
+                       WHERE t.status IN ('completed', 'approved')
+                         AND NOT EXISTS (SELECT 1
+                                         FROM generated_contracts gc
+                                         WHERE gc.transaction_id = t.transaction_number)
+                       ORDER BY t.created_at DESC
+                           LIMIT %s
+                       ''', (limit,))
+
+        transactions = cursor.fetchall()
+
+        results = {
+            'total_found': len(transactions),
+            'processed': 0,
+            'errors': 0,
+            'contracts_created': [],
+            'errors_list': [],
+            'dry_run': dry_run
+        }
+
+        if dry_run:
+            results['preview'] = []
+            for txn in transactions:
+                metadata = txn['metadata'] if txn['metadata'] else {}
+                results['preview'].append({
+                    'transaction_number': txn['transaction_number'],
+                    'customer_name': f"{txn['first_name']} {txn['last_name']}",
+                    'amount': float(txn['amount']),
+                    'product_type': metadata.get('product_type', 'unknown'),
+                    'created_at': txn['created_at'].isoformat() if txn['created_at'] else None
+                })
+
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'success': True,
+                'data': results
+            })
+
+        # Process each transaction
+        for txn in transactions:
+            try:
+                metadata = txn['metadata'] if txn['metadata'] else {}
+                product_type = metadata.get('product_type', 'protection_plan')
+                contract_number = f"CAC-{product_type.upper()}-{txn['transaction_number']}"
+
+                # Get template
+                cursor.execute('''
+                               SELECT id
+                               FROM contract_templates
+                               WHERE product_type = %s
+                                 AND active = true
+                               ORDER BY created_at DESC LIMIT 1
+                               ''', (product_type,))
+
+                template = cursor.fetchone()
+                template_id = template['id'] if template else None
+
+                # Prepare data
+                customer_data = {
+                    'first_name': txn['first_name'],
+                    'last_name': txn['last_name'],
+                    'email': txn['email'],
+                    'phone': txn['phone'],
+                    'address': txn['address'],
+                    'billing_address': txn['billing_address']
+                }
+
+                contract_data = {
+                    'transaction_info': {
+                        'transaction_number': txn['transaction_number'],
+                        'amount': float(txn['amount']),
+                        'payment_method': txn['payment_method'],
+                        'transaction_date': txn['created_at'].isoformat() if txn['created_at'] else None
+                    },
+                    'product_info': {
+                        'product_type': product_type,
+                        'metadata': metadata
+                    },
+                    'backfilled': True,
+                    'backfilled_at': datetime.now(timezone.utc).isoformat()
+                }
+
+                # Insert contract
+                cursor.execute('''
+                               INSERT INTO generated_contracts
+                               (contract_number, transaction_id, template_id, customer_id,
+                                customer_data, contract_data, status, generated_date)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                               ''', (
+                                   contract_number,
+                                   txn['transaction_number'],
+                                   template_id,
+                                   txn['customer_id'],
+                                   json.dumps(customer_data),
+                                   json.dumps(contract_data),
+                                   'completed',
+                                   txn['created_at']  # Use original transaction date
+                               ))
+
+                contract_id = cursor.fetchone()[0]
+
+                # Log activity
+                cursor.execute('''
+                               INSERT INTO contract_activities
+                                   (contract_id, activity_type, description, performed_at)
+                               VALUES (%s, %s, %s, %s)
+                               ''', (
+                                   contract_id,
+                                   'generated',
+                                   f'Contract backfilled for transaction {txn["transaction_number"]}',
+                                   datetime.now(timezone.utc)
+                               ))
+
+                results['contracts_created'].append({
+                    'transaction_number': txn['transaction_number'],
+                    'contract_number': contract_number,
+                    'contract_id': str(contract_id),
+                    'customer_name': f"{txn['first_name']} {txn['last_name']}",
+                    'amount': float(txn['amount']),
+                    'product_type': product_type
+                })
+
+                results['processed'] += 1
+
+            except Exception as e:
+                results['errors'] += 1
+                results['errors_list'].append({
+                    'transaction_number': txn['transaction_number'],
+                    'error': str(e)
+                })
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'data': results
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Failed to backfill contracts: {str(e)}'
+        }), 500
