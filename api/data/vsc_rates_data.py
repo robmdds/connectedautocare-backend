@@ -498,17 +498,36 @@ def get_age_multiplier(vehicle_age: int) -> float:
     # Fallback to highest multiplier
     return 1.60
 
+
 def get_vsc_coverage_options() -> Dict:
     """
-    Get all available VSC coverage options
+    Get all available VSC coverage options including mileage allowance options
     
     Returns:
-        dict: Complete coverage options
+        dict: Complete coverage options including mileage allowance tiers
     """
     coverage_levels = rate_manager.get_coverage_levels()
     term_multipliers = rate_manager.get_term_multipliers()
     deductible_multipliers = rate_manager.get_deductible_multipliers()
     classification = rate_manager.get_vehicle_classification()
+    
+    # Define standard mileage allowance options
+    mileage_allowance_options = [
+        {'miles': 8000, 'label': '8,000 Miles', 'annual_equivalent': '8,000/year', 'tier': 'Very Low'},
+        {'miles': 10000, 'label': '10,000 Miles', 'annual_equivalent': '10,000/year', 'tier': 'Low'},
+        {'miles': 12000, 'label': '12,000 Miles', 'annual_equivalent': '12,000/year', 'tier': 'Standard'},
+        {'miles': 15000, 'label': '15,000 Miles', 'annual_equivalent': '15,000/year', 'tier': 'Above Average'},
+        {'miles': 18000, 'label': '18,000 Miles', 'annual_equivalent': '18,000/year', 'tier': 'High Usage'},
+        {'miles': 21000, 'label': '21,000 Miles', 'annual_equivalent': '21,000/year', 'tier': 'Very High'},
+        {'miles': 24000, 'label': '24,000 Miles', 'annual_equivalent': '24,000/year', 'tier': 'Premium'},
+        {'miles': 30000, 'label': '30,000 Miles', 'annual_equivalent': '30,000/year', 'tier': 'Maximum'},
+        {'miles': None, 'label': 'Unlimited Miles', 'annual_equivalent': 'unlimited', 'tier': 'Unlimited'}
+    ]
+    
+    # Add multipliers to each option (using 36 months as base calculation)
+    for option in mileage_allowance_options:
+        option['multiplier'] = get_mileage_allowance_multiplier(option['miles'], 36)
+        option['pricing_impact'] = f'{((option["multiplier"] - 1.0) * 100):+.0f}% vs base'
     
     return {
         'coverage_levels': coverage_levels,
@@ -520,22 +539,37 @@ def get_vsc_coverage_options() -> Dict:
             'available_deductibles': list(deductible_multipliers.keys()),
             'multipliers': deductible_multipliers
         },
+        'mileage_allowance_options': {
+            'description': 'Miles allowed during contract period',
+            'options': mileage_allowance_options,
+            'notes': [
+                'Mileage allowance affects pricing - higher allowances cost more',
+                'Annual equivalents shown are for 36-month contracts',
+                'Unlimited option includes 40% premium but no restrictions',
+                'Choose based on expected driving during contract period'
+            ]
+        },
         'vehicle_classes': {
             vehicle_class: {
                 'description': f'Class {vehicle_class} vehicles',
                 'example_makes': [
-                    make for make, cls in classification.items() 
+                    make.title() for make, cls in classification.items() 
                     if cls == vehicle_class
                 ][:5]  # Show first 5 examples
             }
             for vehicle_class in ['A', 'B', 'C']
+        },
+        'eligibility_requirements': {
+            'max_vehicle_age': 20,
+            'max_current_mileage': 199999,
+            'message': 'Vehicle must be 20 model years or newer with less than 200,000 current miles'
         }
     }
 
 def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str = 'gold', 
-                       term_months: int = 36, deductible: int = 100, customer_type: str = 'retail') -> Dict:
+                       term_months: int = 36, mileage_allowance=None, deductible: int = 100, customer_type: str = 'retail') -> Dict:
     """
-    Calculate VSC price based on all factors with exact rate lookup
+    Calculate VSC price based on all factors with exact rate lookup and mileage allowance support
     
     Args:
         make: Vehicle make
@@ -543,6 +577,7 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
         mileage: Vehicle mileage
         coverage_level: Coverage level
         term_months: Contract term in months
+        mileage_allowance: Integer for contract mileage allowance, or None for unlimited
         deductible: Deductible amount
         customer_type: Customer type (retail/wholesale)
         
@@ -550,6 +585,48 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
         dict: Price calculation breakdown
     """
     try:
+        current_year = datetime.now().year
+        
+        # Input validation
+        if not make or not isinstance(make, str):
+            return {'success': False, 'error': 'Valid vehicle make is required'}
+            
+        if not year or year < (current_year - 30) or year > (current_year + 1):
+            return {'success': False, 'error': f'Vehicle year must be between {current_year - 30} and {current_year + 1}'}
+            
+        if not isinstance(mileage, int) or mileage < 0 or mileage >= 200000:
+            return {'success': False, 'error': 'Current mileage must be between 0 and 199,999'}
+            
+        if coverage_level not in ['silver', 'gold', 'platinum']:
+            return {'success': False, 'error': 'Coverage level must be silver, gold, or platinum'}
+            
+        if term_months not in [12, 24, 36, 48, 60, 72]:
+            return {'success': False, 'error': 'Term must be 12, 24, 36, 48, 60, or 72 months'}
+            
+        if customer_type not in ['retail', 'wholesale']:
+            return {'success': False, 'error': 'Customer type must be retail or wholesale'}
+        
+        # Validate mileage allowance
+        if mileage_allowance is not None:
+            if not isinstance(mileage_allowance, int) or mileage_allowance < 0:
+                return {'success': False, 'error': 'Mileage allowance must be a positive integer or None for unlimited'}
+                
+        # Check vehicle eligibility
+        vehicle_age = current_year - year
+        if vehicle_age > 20:
+            return {
+                'success': False,
+                'eligible': False,
+                'error': f'Vehicle is {vehicle_age} years old (must be 20 model years or newer)'
+            }
+            
+        if mileage >= 200000:
+            return {
+                'success': False,
+                'eligible': False,
+                'error': f'Vehicle has {mileage:,} miles (must be less than 200,000 miles)'
+            }
+        
         # Get vehicle class
         vehicle_class = get_vehicle_class(make)
         
@@ -565,30 +642,41 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
             deductible_multiplier = deductible_multipliers.get(deductible, 1.0)
             calculated_price *= deductible_multiplier
             
+            # NEW: Apply mileage allowance multiplier
+            allowance_multiplier = get_mileage_allowance_multiplier(mileage_allowance, term_months)
+            calculated_price *= allowance_multiplier
+            
             # Apply customer discount
             customer_discount = 0.85 if customer_type == 'wholesale' else 1.0
             calculated_price *= customer_discount
             
             return {
                 'success': True,
-                'pricing_method': 'exact_pdf_rate',
+                'eligible': True,
+                'pricing_method': 'exact_pdf_rate_with_mileage_allowance',
                 'vehicle_class': vehicle_class,
                 'exact_rate': exact_rate,
                 'calculated_price': round(calculated_price, 2),
+                'vehicle_info': {
+                    'make': make.title(),
+                    'year': year,
+                    'mileage': mileage,
+                    'vehicle_class': vehicle_class,
+                    'age_years': vehicle_age
+                },
                 'multipliers': {
                     'deductible': deductible_multiplier,
+                    'mileage_allowance': allowance_multiplier,  # NEW
                     'customer_discount': customer_discount
                 }
             }
         
         else:
-            # Fallback to calculated method
-            vehicle_age = datetime.now().year - year
-            
+            # Fallback to calculated method with all multipliers
             # Get base rate
             base_rate = get_base_rate(vehicle_class, coverage_level)
             
-            # Calculate multipliers
+            # Calculate all multipliers
             age_multiplier = get_age_multiplier(vehicle_age)
             mileage_multiplier = get_mileage_multiplier(mileage)
             
@@ -598,9 +686,12 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
             deductible_multipliers = rate_manager.get_deductible_multipliers()
             deductible_multiplier = deductible_multipliers.get(deductible, 1.0)
             
-            # Calculate price
+            # NEW: Mileage allowance multiplier
+            allowance_multiplier = get_mileage_allowance_multiplier(mileage_allowance, term_months)
+            
+            # Calculate price with all multipliers
             calculated_price = (base_rate * age_multiplier * mileage_multiplier * 
-                              term_multiplier * deductible_multiplier)
+                              term_multiplier * deductible_multiplier * allowance_multiplier)
             
             # Apply customer discount
             customer_discount = 0.85 if customer_type == 'wholesale' else 1.0
@@ -608,15 +699,24 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
             
             return {
                 'success': True,
-                'pricing_method': 'calculated',
+                'eligible': True,
+                'pricing_method': 'calculated_with_mileage_allowance',
                 'vehicle_class': vehicle_class,
                 'base_rate': base_rate,
                 'calculated_price': round(calculated_price, 2),
+                'vehicle_info': {
+                    'make': make.title(),
+                    'year': year,
+                    'mileage': mileage,
+                    'vehicle_class': vehicle_class,
+                    'age_years': vehicle_age
+                },
                 'multipliers': {
                     'age': age_multiplier,
                     'mileage': mileage_multiplier,
                     'term': term_multiplier,
                     'deductible': deductible_multiplier,
+                    'mileage_allowance': allowance_multiplier,  # NEW
                     'customer_discount': customer_discount
                 }
             }
@@ -626,4 +726,258 @@ def calculate_vsc_price(make: str, year: int, mileage: int, coverage_level: str 
         return {
             'success': False,
             'error': str(e)
+        }
+
+# Add these new functions to your vsc_rates_data.py file
+
+def get_term_multiplier(term_months: int) -> float:
+    """
+    Get term multiplier for a specific term
+    
+    Args:
+        term_months: Contract term in months
+        
+    Returns:
+        float: Term multiplier
+    """
+    term_multipliers = rate_manager.get_term_multipliers()
+    return term_multipliers.get(term_months, 1.0)
+
+def get_deductible_multiplier(deductible: int) -> float:
+    """
+    Get deductible multiplier for a specific deductible amount
+    
+    Args:
+        deductible: Deductible amount
+        
+    Returns:
+        float: Deductible multiplier
+    """
+    deductible_multipliers = rate_manager.get_deductible_multipliers()
+    return deductible_multipliers.get(deductible, 1.0)
+
+def get_mileage_allowance_multiplier(mileage_allowance, term_months: int) -> float:
+    """
+    Calculate pricing multiplier based on mileage allowance
+    
+    Args:
+        mileage_allowance: Integer miles allowed during contract, or None for unlimited
+        term_months: Contract term in months
+        
+    Returns:
+        float: Pricing multiplier (0.80 for low usage to 1.65 for extreme usage, 1.4 for unlimited)
+    """
+    try:
+        # Handle unlimited mileage case
+        if mileage_allowance is None or mileage_allowance == 'unlimited':  
+            return 1.4  # 40% premium for unlimited mileage
+        
+        # Validate inputs
+        if not isinstance(mileage_allowance, int) or mileage_allowance < 0:
+            return 1.0  # Default multiplier for invalid input
+            
+        if not isinstance(term_months, int) or term_months <= 0:
+            return 1.0  # Default multiplier for invalid term
+        
+        # Calculate annual average allowance
+        annual_average = mileage_allowance / (term_months / 12)
+        
+        # Define mileage tiers and multipliers based on industry standards
+        mileage_tiers = [
+            (8000, 0.80),    # Very low mileage (under 8k/year) - maximum discount
+            (10000, 0.85),   # Low mileage (8k-10k/year) - good discount
+            (12000, 1.00),   # Base rate (10k-12k/year) - standard usage
+            (15000, 1.10),   # Moderate increase (12k-15k/year) - above average
+            (18000, 1.20),   # Higher usage (15k-18k/year) - increased risk
+            (21000, 1.30),   # High usage (18k-21k/year) - higher risk
+            (24000, 1.35),   # Very high usage (21k-24k/year) - significant risk
+            (27000, 1.45),   # Extreme usage (24k-27k/year) - major risk
+            (30000, 1.50),   # Maximum standard (27k-30k/year) - highest standard risk
+            (float('inf'), 1.65)  # Extreme cases (30k+/year) - maximum multiplier
+        ]
+        
+        # Find appropriate multiplier
+        for threshold, multiplier in mileage_tiers:
+            if annual_average <= threshold:
+                return multiplier
+        
+        # Fallback (should never reach here due to infinity threshold)
+        return 1.65
+        
+    except Exception as e:
+        logger.warning(f"Error calculating mileage allowance multiplier: {e}")
+        return 1.0  # Safe default multiplier
+
+def get_mileage_allowance_recommendations(vehicle_age: int, current_mileage: int, term_months: int, vehicle_class: str = 'B') -> Dict:
+    """
+    Generate recommended mileage allowances based on vehicle characteristics
+    
+    Args:
+        vehicle_age: Age of vehicle in years
+        current_mileage: Current odometer reading
+        term_months: Contract term in months
+        vehicle_class: A, B, or C classification
+        
+    Returns:
+        Dict with recommendations and analysis
+    """
+    try:
+        # Calculate historical annual mileage
+        if vehicle_age > 0:
+            historical_annual = current_mileage / vehicle_age
+        else:
+            historical_annual = 12000  # Default assumption for new vehicles
+        
+        # Adjust for vehicle class behavior patterns
+        class_adjustments = {
+            'A': 0.9,   # Reliable brands typically driven more conservatively
+            'B': 1.0,   # Average driving patterns
+            'C': 1.1    # Luxury vehicles often driven more
+        }
+        
+        adjusted_annual = historical_annual * class_adjustments.get(vehicle_class, 1.0)
+        
+        # Calculate base recommendation for contract term
+        base_contract_allowance = int(adjusted_annual * (term_months / 12))
+        
+        # Generate tiered recommendations
+        recommendations = [
+            {
+                'tier': 'Conservative',
+                'allowance': max(int(base_contract_allowance * 0.75), 8000),
+                'annual_equivalent': max(int(adjusted_annual * 0.75), 8000),
+                'multiplier': get_mileage_allowance_multiplier(max(int(base_contract_allowance * 0.75), 8000), term_months),
+                'description': 'Lower than historical usage - best for reduced driving',
+                'recommended_for': 'Retirement, work-from-home, urban driving'
+            },
+            {
+                'tier': 'Standard',
+                'allowance': max(base_contract_allowance, 12000),
+                'annual_equivalent': max(int(adjusted_annual), 12000),
+                'multiplier': get_mileage_allowance_multiplier(max(base_contract_allowance, 12000), term_months),
+                'description': 'Based on your historical driving pattern',
+                'recommended_for': 'Maintaining current driving habits'
+            },
+            {
+                'tier': 'High Usage',
+                'allowance': int(base_contract_allowance * 1.25),
+                'annual_equivalent': int(adjusted_annual * 1.25),
+                'multiplier': get_mileage_allowance_multiplier(int(base_contract_allowance * 1.25), term_months),
+                'description': 'Above historical usage - good for lifestyle changes',
+                'recommended_for': 'New job, moving, increased travel'
+            },
+            {
+                'tier': 'Premium',
+                'allowance': int(base_contract_allowance * 1.5),
+                'annual_equivalent': int(adjusted_annual * 1.5),
+                'multiplier': get_mileage_allowance_multiplier(int(base_contract_allowance * 1.5), term_months),
+                'description': 'Maximum flexibility for heavy drivers',
+                'recommended_for': 'Sales, delivery, frequent long trips'
+            },
+            {
+                'tier': 'Unlimited',
+                'allowance': None,
+                'annual_equivalent': 'unlimited',
+                'multiplier': get_mileage_allowance_multiplier(None, term_months),
+                'description': 'No mileage restrictions whatsoever',
+                'recommended_for': 'Commercial use, extreme driving needs'
+            }
+        ]
+        
+        return {
+            'success': True,
+            'analysis': {
+                'historical_annual_miles': int(historical_annual),
+                'vehicle_class': vehicle_class,
+                'vehicle_age': vehicle_age,
+                'current_mileage': current_mileage,
+                'class_adjustment_factor': class_adjustments.get(vehicle_class, 1.0),
+                'adjusted_annual_estimate': int(adjusted_annual)
+            },
+            'recommendations': recommendations,
+            'notes': [
+                'Recommendations based on historical driving patterns',
+                'Vehicle class affects typical usage expectations',
+                'Choose higher tiers for major lifestyle changes',
+                'Unlimited option includes 40% premium but no restrictions'
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to generate mileage allowance recommendations: {e}")
+        return {
+            'success': False,
+            'error': f'Failed to generate recommendations: {str(e)}'
+        }
+
+def validate_mileage_allowance_input(mileage_allowance, term_months: int) -> Dict:
+    """
+    Validate mileage allowance input and provide feedback
+    
+    Args:
+        mileage_allowance: User input for mileage allowance
+        term_months: Contract term in months
+        
+    Returns:
+        Dict with validation results and suggestions
+    """
+    try:
+        if mileage_allowance is None or mileage_allowance == 'unlimited':
+            return {
+                'valid': True,
+                'normalized_value': None,
+                'annual_equivalent': 'unlimited',
+                'multiplier': get_mileage_allowance_multiplier(None, term_months),
+                'warnings': ['Unlimited mileage includes 40% premium pricing']
+            }
+        
+        # Try to convert to integer
+        try:
+            allowance_int = int(mileage_allowance)
+        except (ValueError, TypeError):
+            return {
+                'valid': False,
+                'error': 'Mileage allowance must be a number or "unlimited"'
+            }
+        
+        # Validate range
+        if allowance_int < 0:
+            return {
+                'valid': False,
+                'error': 'Mileage allowance cannot be negative'
+            }
+        
+        if allowance_int > 200000:  # Reasonable upper limit
+            return {
+                'valid': False,
+                'error': 'Mileage allowance cannot exceed 200,000 miles'
+            }
+        
+        # Calculate annual equivalent
+        annual_equivalent = int(allowance_int / (term_months / 12)) if term_months > 0 else 0
+        multiplier = get_mileage_allowance_multiplier(allowance_int, term_months)
+        
+        # Generate warnings for unusual values
+        warnings = []
+        if annual_equivalent > 50000:
+            warnings.append(f'Very high annual mileage ({annual_equivalent:,}/year) - consider unlimited option')
+        elif annual_equivalent < 5000:
+            warnings.append(f'Very low annual mileage ({annual_equivalent:,}/year) - ensure this meets your needs')
+        elif annual_equivalent > 30000:
+            warnings.append(f'High annual mileage ({annual_equivalent:,}/year) - significant premium applies')
+        
+        return {
+            'valid': True,
+            'normalized_value': allowance_int,
+            'annual_equivalent': annual_equivalent,
+            'multiplier': multiplier,
+            'warnings': warnings,
+            'pricing_impact': f'{((multiplier - 1.0) * 100):+.0f}% vs base rate'
+        }
+        
+    except Exception as e:
+        logger.error(f"Mileage allowance validation error: {e}")
+        return {
+            'valid': False,
+            'error': f'Validation error: {str(e)}'
         }

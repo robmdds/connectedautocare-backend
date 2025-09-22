@@ -142,7 +142,7 @@ def generate_vsc_quote():
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
-        # Parse and validate input data
+        # Parse and validate input data - ADD mileage_allowance
         try:
             make = data['make'].strip()
             model = data.get('model', '').strip()
@@ -150,8 +150,18 @@ def generate_vsc_quote():
             mileage = int(data['mileage'])
             coverage_level = data.get('coverage_level', 'gold').lower()
             term_months = int(data.get('term_months', 36))
+            mileage_allowance = data.get('mileage_allowance', 36000)  # NEW: Add mileage allowance
             deductible = int(data.get('deductible', 100))
             customer_type = data.get('customer_type', 'retail').lower()
+            
+            # Handle unlimited mileage allowance
+            if mileage_allowance == 'unlimited':
+                mileage_allowance_int = None
+                annual_mileage_average = 'unlimited'
+            else:
+                mileage_allowance_int = int(mileage_allowance)
+                annual_mileage_average = round(mileage_allowance_int / (term_months / 12)) if term_months > 0 else 0
+                
         except (ValueError, TypeError) as e:
             return jsonify({"error": f"Invalid input data: {str(e)}"}), 400
 
@@ -164,6 +174,7 @@ def generate_vsc_quote():
                     mileage=mileage,
                     coverage_level=coverage_level,
                     term_months=term_months,
+                    mileage_allowance=mileage_allowance_int,  # NEW: Pass mileage allowance
                     deductible=deductible,
                     customer_type=customer_type
                 )
@@ -238,11 +249,13 @@ def generate_vsc_quote():
                         'age_years': datetime.now().year - year
                     },
                     
-                    # Coverage details
+                    # Coverage details - ADD mileage allowance info
                     'coverage_details': {
                         'level': coverage_level.title(),
                         'term_months': term_months,
                         'term_years': round(term_months / 12, 1),
+                        'mileage_allowance': mileage_allowance,  # NEW: Include in response
+                        'annual_mileage_average': annual_mileage_average,  # NEW
                         'deductible': deductible,
                         'customer_type': customer_type.title()
                     },
